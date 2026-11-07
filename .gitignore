@@ -1,0 +1,9 @@
+.task
+.wails
+bin
+.DS_Store
+frontend/dist
+frontend/node_modules
+frontend/bindings
+notebook
+*.local

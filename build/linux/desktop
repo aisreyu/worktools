@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=WorkTools
+Comment=A worktools application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/worktools %u
+Terminal=false
+Type=Application
+Icon=worktools
+Categories=Utility;
+StartupWMClass=worktools
+
+ 

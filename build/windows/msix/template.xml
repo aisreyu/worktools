@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MsixPackagingToolTemplate
+    xmlns="http://schemas.microsoft.com/msix/packaging/msixpackagingtool/template/2022">
+    <Settings
+        AllowTelemetry="false"
+        ApplyACLsToPackageFiles="true"
+        GenerateCommandLineFile="true"
+        AllowPromptForPassword="false">
+    </Settings>
+    <Installer
+        Path="notebook"
+        Arguments=""
+        InstallLocation="C:\Program Files\Tongdun\Notebook">
+    </Installer>
+    <PackageInformation
+        PackageName="Notebook"
+        PackageDisplayName="Notebook"
+        PublisherName="CN=Tongdun"
+        PublisherDisplayName="Tongdun"
+        Version="0.1.0.0"
+        PackageDescription="A notebook application">
+        <Capabilities>
+            <Capability Name="runFullTrust" />
+            
+        </Capabilities>
+        <Applications>
+            <Application
+                Id="com.tongdun.notebook"
+                Description="A notebook application"
+                DisplayName="Notebook"
+                ExecutableName="notebook"
+                EntryPoint="Windows.FullTrustApplication">
+                
+            </Application>
+        </Applications>
+        <Resources>
+            <Resource Language="en-us" />
+        </Resources>
+        <Dependencies>
+            <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+        </Dependencies>
+        <Properties>
+            <Framework>false</Framework>
+            <DisplayName>Notebook</DisplayName>
+            <PublisherDisplayName>Tongdun</PublisherDisplayName>
+            <Description>A notebook application</Description>
+            <Logo>Assets\AppIcon.png</Logo>
+        </Properties>
+    </PackageInformation>
+    <SaveLocation PackagePath="notebook.msix" />
+    <PackageIntegrity>
+        <CertificatePath></CertificatePath>
+    </PackageIntegrity>
+</MsixPackagingToolTemplate>
