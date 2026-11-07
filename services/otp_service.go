@@ -4,9 +4,9 @@ import (
 	"os"
 	"strings"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/otp"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/otp"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // OTPService manages OTP entries and generates live codes.

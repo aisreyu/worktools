@@ -11,7 +11,7 @@ import (
 	"github.com/pquerna/otp/hotp"
 	"github.com/pquerna/otp/totp"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // Params is the normalised set of options for generating a code.

@@ -5,7 +5,7 @@ import {
   NSwitch, NTag, NTimePicker, NCheckbox, useMessage,
 } from 'naive-ui'
 import { ScheduleService } from '../lib/api'
-import type { ScheduleEntry } from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/internal/store/models'
+import type { ScheduleEntry } from '../../bindings/github.com/aisreyu/worktools/internal/store/models'
 import { t } from '../lib/i18n'
 
 const message = useMessage()

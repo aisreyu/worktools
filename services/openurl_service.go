@@ -8,8 +8,8 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // OpenURLService opens URL entries in an embedded webview window and can

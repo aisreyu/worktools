@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 func TestFileEntryInlineRoundTrip(t *testing.T) {

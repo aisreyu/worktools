@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // VaultService manages locking, unlocking and entry CRUD.

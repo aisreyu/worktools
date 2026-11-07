@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/config"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/config"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // ---- M7: private-folder files ----

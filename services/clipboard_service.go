@@ -9,9 +9,9 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/clipboard"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/clipboard"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // clipboardEventName is emitted whenever the stored history changes so open

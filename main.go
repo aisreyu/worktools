@@ -6,10 +6,10 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/config"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/services"
+	"github.com/aisreyu/worktools/internal/config"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
+	"github.com/aisreyu/worktools/services"
 )
 
 // The frontend build output is embedded into the binary.

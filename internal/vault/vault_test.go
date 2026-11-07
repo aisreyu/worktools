@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // openTestVault returns an in-memory vault plus its database handle.

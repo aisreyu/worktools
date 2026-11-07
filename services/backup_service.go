@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // BackupService exports and imports encrypted backup files.

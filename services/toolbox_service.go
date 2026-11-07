@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/toolbox"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/toolbox"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // ToolboxService exposes stateless ops utilities to the UI.

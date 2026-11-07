@@ -3,7 +3,7 @@ package vault
 import (
 	"testing"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 func TestCategoryDefaultsSeededOnUnlock(t *testing.T) {

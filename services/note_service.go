@@ -3,8 +3,8 @@ package services
 import (
 	"strings"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // NoteService manages the multi-record notepad.

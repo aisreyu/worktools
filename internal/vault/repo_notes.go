@@ -3,7 +3,7 @@ package vault
 import (
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // ---- M4: note entries ----

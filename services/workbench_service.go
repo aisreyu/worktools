@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/toolbox"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/toolbox"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // WorkbenchService powers the "daily use" features: cross-module quick search,

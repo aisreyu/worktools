@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/holiday"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/vault"
+	"github.com/aisreyu/worktools/internal/holiday"
+	"github.com/aisreyu/worktools/internal/store"
+	"github.com/aisreyu/worktools/internal/vault"
 )
 
 // ScheduleService manages calendar schedules with due-time reminders.

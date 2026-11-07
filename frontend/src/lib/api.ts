@@ -1,10 +1,10 @@
 // Thin wrappers over the generated Wails bindings so views don't import deep
 // paths and we can centralise locked-vault error handling.
-import * as Services from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/services'
-import * as Store from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/internal/store'
-import * as OTP from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/internal/otp'
-import * as Toolbox from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/internal/toolbox'
-import * as Holiday from '../../bindings/gitlab.tongdun.cn/anxiang.peng/notebook/internal/holiday'
+import * as Services from '../../bindings/github.com/aisreyu/worktools/services'
+import * as Store from '../../bindings/github.com/aisreyu/worktools/internal/store'
+import * as OTP from '../../bindings/github.com/aisreyu/worktools/internal/otp'
+import * as Toolbox from '../../bindings/github.com/aisreyu/worktools/internal/toolbox'
+import * as Holiday from '../../bindings/github.com/aisreyu/worktools/internal/holiday'
 
 export const AppService = Services.AppService
 export const WorkbenchService = Services.WorkbenchService

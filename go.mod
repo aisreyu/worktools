@@ -1,4 +1,4 @@
-module gitlab.tongdun.cn/anxiang.peng/notebook
+module github.com/aisreyu/worktools
 
 go 1.26.0
 

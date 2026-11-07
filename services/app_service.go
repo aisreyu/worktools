@@ -1,7 +1,7 @@
 package services
 
 import (
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/config"
+	"github.com/aisreyu/worktools/internal/config"
 )
 
 // AppVersion is the application version shown in Settings / About.
@@ -35,6 +35,6 @@ func (s *AppService) Info() AppInfo {
 		Version:     AppVersion,
 		Platform:    config.Platform(),
 		Description: "Local-first encrypted ops workbench: URLs & credentials, OTP, notes, calendar & schedules, toolbox.",
-		Website:     "https://gitlab.tongdun.cn/anxiang.peng/notebook",
+		Website:     "https://github.com/aisreyu/worktools",
 	}
 }

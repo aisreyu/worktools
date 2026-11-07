@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/clipboard"
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/clipboard"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // ---- M9: persistent, manageable clipboard history ----

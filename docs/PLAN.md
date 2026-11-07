@@ -51,7 +51,7 @@
 ## 3. 目录结构设计
 
 ```
-worktools/                       # Go module 名沿用 gitlab.tongdun.cn/anxiang.peng/notebook（历史兼容）
+worktools/                       # Go module: github.com/aisreyu/worktools
 ├── docs/
 │   └── PLAN.md                 # 本文档
 ├── build/                      # Wails v3 构建配置（config.yml、各平台打包模板）

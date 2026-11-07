@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // Backup format: JSON envelope encrypted with AES-256-GCM under a key derived

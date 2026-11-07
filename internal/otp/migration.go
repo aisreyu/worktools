@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"gitlab.tongdun.cn/anxiang.peng/notebook/internal/store"
+	"github.com/aisreyu/worktools/internal/store"
 )
 
 // Google Authenticator's "Export accounts" feature shows QR codes containing
