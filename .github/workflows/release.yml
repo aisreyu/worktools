@@ -108,9 +108,11 @@ jobs:
       - name: Create .rpm
         run: wails3 task linux:create:rpm EXTRA_TAGS=purego
 
+      # AppImage's GTK auto-detection inspects `ldd` on the binary, so it needs
+      # a dynamically linked (CGO) build rather than the purego one.
       - name: Create AppImage
         continue-on-error: true
-        run: wails3 task linux:create:appimage EXTRA_TAGS=purego
+        run: wails3 task linux:create:appimage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -206,6 +208,14 @@ jobs:
           "$SDKMANAGER" --install \
             "platform-tools" "platforms;android-36" \
             "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      # wails3's GTK bindings must compile, so GTK4/WebKitGTK headers are
+      # required here too (the android build only needs the CLI, not the libs).
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Install wails3 CLI
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
