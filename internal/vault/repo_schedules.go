@@ -17,7 +17,7 @@ func (v *Vault) ListSchedules() ([]store.ScheduleEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, title, detail_ct, detail_nonce, due_at, remind, done, notified, created_at, updated_at
+	rows, err := v.db.Query(`SELECT id, title, detail_ct, detail_nonce, due_at, remind, done, notified, recur, created_at, updated_at
         FROM schedule_entries ORDER BY done ASC, due_at ASC`)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (v *Vault) ListSchedules() ([]store.ScheduleEntry, error) {
 			ct, non          []byte
 			done, notified   int
 		)
-		if err := rows.Scan(&e.ID, &e.Title, &ct, &non, &e.DueAt, &e.Remind, &done, &notified, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &ct, &non, &e.DueAt, &e.Remind, &done, &notified, &e.Recur, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if ct != nil {
@@ -69,16 +69,16 @@ func (v *Vault) SaveSchedule(e store.ScheduleEntry) (int64, error) {
 	now := time.Now().Unix()
 	if e.ID == 0 {
 		res, err := v.db.Exec(`INSERT INTO schedule_entries
-            (title, detail_ct, detail_nonce, due_at, remind, done, notified, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			e.Title, ct, non, e.DueAt, e.Remind, done, notified, now, now)
+            (title, detail_ct, detail_nonce, due_at, remind, done, notified, recur, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.Title, ct, non, e.DueAt, e.Remind, done, notified, e.Recur, now, now)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
-	_, err = v.db.Exec(`UPDATE schedule_entries SET title=?, detail_ct=?, detail_nonce=?, due_at=?, remind=?, done=?, notified=?, updated_at=? WHERE id=?`,
-		e.Title, ct, non, e.DueAt, e.Remind, done, notified, now, e.ID)
+	_, err = v.db.Exec(`UPDATE schedule_entries SET title=?, detail_ct=?, detail_nonce=?, due_at=?, remind=?, done=?, notified=?, recur=?, updated_at=? WHERE id=?`,
+		e.Title, ct, non, e.DueAt, e.Remind, done, notified, e.Recur, now, e.ID)
 	return e.ID, err
 }
 
@@ -104,6 +104,14 @@ func (v *Vault) MarkScheduleNotified(id int64) error {
 	return err
 }
 
+// RescheduleNext rolls a recurring schedule forward: it clears done/notified
+// and sets a new due time so the reminder can fire again next period.
+func (v *Vault) RescheduleNext(id int64, nextDue int64) error {
+	_, err := v.db.Exec(`UPDATE schedule_entries SET due_at=?, done=0, notified=0, updated_at=? WHERE id=?`,
+		nextDue, time.Now().Unix(), id)
+	return err
+}
+
 // scheduleRow mirrors schedule_entries for backup/restore.
 type scheduleRow struct {
 	ID        int64
@@ -112,6 +120,7 @@ type scheduleRow struct {
 	DueAt     int64
 	Remind    int
 	Done      bool
+	Recur     string
 	CreatedAt int64
 	UpdatedAt int64
 }
@@ -124,7 +133,7 @@ func (v *Vault) listScheduleRows() ([]scheduleRow, error) {
 	}
 	out := make([]scheduleRow, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, scheduleRow{e.ID, e.Title, e.Detail, e.DueAt, e.Remind, e.Done, e.CreatedAt, e.UpdatedAt})
+		out = append(out, scheduleRow{e.ID, e.Title, e.Detail, e.DueAt, e.Remind, e.Done, e.Recur, e.CreatedAt, e.UpdatedAt})
 	}
 	return out, nil
 }
@@ -134,7 +143,7 @@ func (v *Vault) restoreSchedules(rows []scheduleRow) error {
 	for _, r := range rows {
 		if _, err := v.SaveSchedule(store.ScheduleEntry{
 			Title: r.Title, Detail: r.Detail, DueAt: r.DueAt, Remind: r.Remind,
-			Done: r.Done, CreatedAt: r.CreatedAt,
+			Done: r.Done, Recur: r.Recur, CreatedAt: r.CreatedAt,
 		}); err != nil {
 			return err
 		}

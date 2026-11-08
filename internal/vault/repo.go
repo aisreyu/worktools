@@ -15,8 +15,8 @@ func (v *Vault) ListURLs() ([]store.URLEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, title, url, env, tags, username, password_ct, password_nonce, note, created_at, updated_at
-        FROM url_entries ORDER BY id DESC`)
+	rows, err := v.db.Query(`SELECT id, title, url, env, tags, username, password_ct, password_nonce, note, pinned, created_at, updated_at, deleted_at
+        FROM url_entries WHERE deleted_at = 0 ORDER BY pinned DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func (v *Vault) ListURLs() ([]store.URLEntry, error) {
 			e             store.URLEntry
 			ct, nonce     []byte
 		)
-		if err := rows.Scan(&e.ID, &e.Title, &e.URL, &e.Env, &e.Tags, &e.Username, &ct, &nonce, &e.Note, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &e.URL, &e.Env, &e.Tags, &e.Username, &ct, &nonce, &e.Note, &e.Pinned, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
 			return nil, err
 		}
 		if e.Password, err = c.DecryptField(ct, nonce, aadURLPass); err != nil {
@@ -52,23 +52,32 @@ func (v *Vault) SaveURL(e store.URLEntry) (int64, error) {
 	now := time.Now().Unix()
 	if e.ID == 0 {
 		res, err := v.db.Exec(`INSERT INTO url_entries
-            (title, url, env, tags, username, password_ct, password_nonce, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			e.Title, e.URL, e.Env, e.Tags, e.Username, ct, nonce, e.Note, now, now)
+            (title, url, env, tags, username, password_ct, password_nonce, note, pinned, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.Title, e.URL, e.Env, e.Tags, e.Username, ct, nonce, e.Note, e.Pinned, now, now)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
 	_, err = v.db.Exec(`UPDATE url_entries SET title=?, url=?, env=?, tags=?, username=?,
-        password_ct=?, password_nonce=?, note=?, updated_at=? WHERE id=?`,
-		e.Title, e.URL, e.Env, e.Tags, e.Username, ct, nonce, e.Note, now, e.ID)
+        password_ct=?, password_nonce=?, note=?, pinned=?, updated_at=? WHERE id=?`,
+		e.Title, e.URL, e.Env, e.Tags, e.Username, ct, nonce, e.Note, e.Pinned, now, e.ID)
 	return e.ID, err
 }
 
-// DeleteURL removes a URL entry.
+// DeleteURL moves a URL entry to the trash (soft delete).
 func (v *Vault) DeleteURL(id int64) error {
-	_, err := v.db.Exec(`DELETE FROM url_entries WHERE id = ?`, id)
+	_, err := v.db.Exec(`UPDATE url_entries SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+// SetURLPinned pins or unpins a URL entry so it sorts to the top.
+func (v *Vault) SetURLPinned(id int64, pinned bool) error {
+	if _, err := v.cryptoOrErr(); err != nil {
+		return err
+	}
+	_, err := v.db.Exec(`UPDATE url_entries SET pinned = ?, updated_at = ? WHERE id = ?`, pinned, time.Now().Unix(), id)
 	return err
 }
 
@@ -81,7 +90,7 @@ func (v *Vault) ListSecrets() ([]store.SecretEntry, error) {
 		return nil, err
 	}
 	rows, err := v.db.Query(`SELECT id, title, category, host, port, username, password_ct, password_nonce,
-        extra_ct, extra_nonce, note, created_at, updated_at FROM secret_entries ORDER BY id DESC`)
+        extra_ct, extra_nonce, note, pinned, created_at, updated_at, deleted_at FROM secret_entries WHERE deleted_at = 0 ORDER BY pinned DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +102,7 @@ func (v *Vault) ListSecrets() ([]store.SecretEntry, error) {
 			e                     store.SecretEntry
 			pct, pn, ect, en      []byte
 		)
-		if err := rows.Scan(&e.ID, &e.Title, &e.Category, &e.Host, &e.Port, &e.Username, &pct, &pn, &ect, &en, &e.Note, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &e.Category, &e.Host, &e.Port, &e.Username, &pct, &pn, &ect, &en, &e.Note, &e.Pinned, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
 			return nil, err
 		}
 		if e.Password, err = c.DecryptField(pct, pn, aadSecPass); err != nil {
@@ -124,23 +133,32 @@ func (v *Vault) SaveSecret(e store.SecretEntry) (int64, error) {
 	now := time.Now().Unix()
 	if e.ID == 0 {
 		res, err := v.db.Exec(`INSERT INTO secret_entries
-            (title, category, host, port, username, password_ct, password_nonce, extra_ct, extra_nonce, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			e.Title, e.Category, e.Host, e.Port, e.Username, pct, pn, ect, en, e.Note, now, now)
+            (title, category, host, port, username, password_ct, password_nonce, extra_ct, extra_nonce, note, pinned, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.Title, e.Category, e.Host, e.Port, e.Username, pct, pn, ect, en, e.Note, e.Pinned, now, now)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
 	_, err = v.db.Exec(`UPDATE secret_entries SET title=?, category=?, host=?, port=?, username=?,
-        password_ct=?, password_nonce=?, extra_ct=?, extra_nonce=?, note=?, updated_at=? WHERE id=?`,
-		e.Title, e.Category, e.Host, e.Port, e.Username, pct, pn, ect, en, e.Note, now, e.ID)
+        password_ct=?, password_nonce=?, extra_ct=?, extra_nonce=?, note=?, pinned=?, updated_at=? WHERE id=?`,
+		e.Title, e.Category, e.Host, e.Port, e.Username, pct, pn, ect, en, e.Note, e.Pinned, now, e.ID)
 	return e.ID, err
 }
 
-// DeleteSecret removes a secret entry.
+// DeleteSecret moves a secret entry to the trash (soft delete).
 func (v *Vault) DeleteSecret(id int64) error {
-	_, err := v.db.Exec(`DELETE FROM secret_entries WHERE id = ?`, id)
+	_, err := v.db.Exec(`UPDATE secret_entries SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+// SetSecretPinned pins or unpins a secret entry so it sorts to the top.
+func (v *Vault) SetSecretPinned(id int64, pinned bool) error {
+	if _, err := v.cryptoOrErr(); err != nil {
+		return err
+	}
+	_, err := v.db.Exec(`UPDATE secret_entries SET pinned = ?, updated_at = ? WHERE id = ?`, pinned, time.Now().Unix(), id)
 	return err
 }
 
@@ -152,8 +170,8 @@ func (v *Vault) ListOTPs() ([]store.OTPEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, title, issuer, account, secret_ct, secret_nonce, algorithm, digits, period, otp_type, counter, created_at, updated_at
-        FROM otp_entries ORDER BY id DESC`)
+	rows, err := v.db.Query(`SELECT id, title, issuer, account, secret_ct, secret_nonce, algorithm, digits, period, otp_type, counter, created_at, updated_at, deleted_at
+        FROM otp_entries WHERE deleted_at = 0 ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +183,7 @@ func (v *Vault) ListOTPs() ([]store.OTPEntry, error) {
 			e         store.OTPEntry
 			sct, snon []byte
 		)
-		if err := rows.Scan(&e.ID, &e.Title, &e.Issuer, &e.Account, &sct, &snon, &e.Algorithm, &e.Digits, &e.Period, &e.Type, &e.Counter, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &e.Issuer, &e.Account, &sct, &snon, &e.Algorithm, &e.Digits, &e.Period, &e.Type, &e.Counter, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
 			return nil, err
 		}
 		if e.Secret, err = c.DecryptField(sct, snon, aadOTPSecret); err != nil {
@@ -223,9 +241,9 @@ func (v *Vault) SaveOTP(e store.OTPEntry) (int64, error) {
 	return e.ID, err
 }
 
-// DeleteOTP removes an OTP entry.
+// DeleteOTP moves an OTP entry to the trash (soft delete).
 func (v *Vault) DeleteOTP(id int64) error {
-	_, err := v.db.Exec(`DELETE FROM otp_entries WHERE id = ?`, id)
+	_, err := v.db.Exec(`UPDATE otp_entries SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id)
 	return err
 }
 

@@ -152,7 +152,7 @@ func (v *Vault) DeleteCategory(id int64) error {
 		return err
 	}
 	var n int
-	if err := v.db.QueryRow(`SELECT COUNT(1) FROM file_entries WHERE category = ?`, code).Scan(&n); err != nil {
+	if err := v.db.QueryRow(`SELECT COUNT(1) FROM file_entries WHERE category = ? AND deleted_at = 0`, code).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {

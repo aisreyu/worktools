@@ -13,8 +13,12 @@ import {
   useMessage,
 } from 'naive-ui'
 import { Dialogs } from '@wailsio/runtime'
+import { requestSavePath, publishSaved } from '../lib/saveFile'
 import { FileService, type FileCategory, type FileEntry } from '../lib/api'
 import { t, errText } from '../lib/i18n'
+import { useRouteHighlight } from '../lib/routeHighlight'
+
+useRouteHighlight()
 import PdfViewer from '../components/PdfViewer.vue'
 
 const message = useMessage()
@@ -243,11 +247,13 @@ async function saveMeta() {
 async function exportFile() {
   const f = selected.value
   if (!f) return
-  const path = await Dialogs.SaveFile({ Title: t('files.export'), Filename: exportName(f) })
+  const name = exportName(f)
+  const path = await requestSavePath(t('files.export'), name)
   if (!path) return
   try {
     await FileService.Export(f.id, path)
-    message.success(t('files.exported') + path)
+    const where = await publishSaved(path, name)
+    message.success(t('files.exported') + (where || path))
   } catch (e) {
     message.error(errText(e))
   }
@@ -326,6 +332,7 @@ onMounted(load)
             :key="f.id"
             class="file-item"
             :class="{ active: f.id === selectedId }"
+            :data-hid="f.id"
             @click="select(f)"
           >
             <div class="file-item-title">🔒 {{ f.title }}</div>

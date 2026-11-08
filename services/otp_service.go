@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aisreyu/worktools/internal/otp"
 	"github.com/aisreyu/worktools/internal/store"
@@ -144,6 +145,54 @@ func (s *OTPService) ExportQRImage(uri string) ([]byte, error) {
 		return nil, errText("生成二维码失败: " + err.Error())
 	}
 	return png, nil
+}
+
+// ExportPlaintext renders the selected entries (nil = all) as a human-readable
+// recovery sheet: title, account, otpauth:// URI and the Base32 secret. This
+// is a plaintext export meant for offline safekeeping (e.g. printing), so the
+// caller must treat the output as sensitive.
+func (s *OTPService) ExportPlaintext(ids []int64) (string, error) {
+	if s.v.Locked() {
+		return "", vault.ErrLocked
+	}
+	entries, err := s.exportEntries(ids)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# WorkTools OTP 恢复码\n")
+	b.WriteString("# 生成时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
+	b.WriteString("# ⚠️ 本文件包含明文密钥，仅用于离线备份/打印，请注意妥善保管！\n")
+	b.WriteString("# 账户格式: 标题 | 账号 | 类型 | Base32 密钥 | otpauth URI\n")
+	b.WriteString("# ============================================================\n\n")
+	for _, e := range entries {
+		uri, err := otp.BuildEntryURI(e)
+		if err != nil {
+			uri = "(无法生成 URI: " + err.Error() + ")"
+		}
+		account := e.Account
+		if account == "" {
+			account = "-"
+		}
+		typ := "TOTP"
+		if strings.EqualFold(e.Type, "hotp") {
+			typ = "HOTP"
+		}
+		title := e.Title
+		if title == "" {
+			title = "(未命名)"
+		}
+		b.WriteString("标题: " + title + "\n")
+		if e.Issuer != "" {
+			b.WriteString("发行方: " + e.Issuer + "\n")
+		}
+		b.WriteString("账号: " + account + "\n")
+		b.WriteString("类型: " + typ + "\n")
+		b.WriteString("密钥: " + e.Secret + "\n")
+		b.WriteString("URI:  " + uri + "\n")
+		b.WriteString("------------------------------------------------------------\n")
+	}
+	return b.String(), nil
 }
 
 // exportEntries resolves ids to full entries (with secrets); nil ids means

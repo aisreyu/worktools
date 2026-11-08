@@ -10,6 +10,7 @@ import Calendar from '../views/Calendar.vue'
 import Schedule from '../views/Schedule.vue'
 import Toolbox from '../views/Toolbox.vue'
 import Settings from '../views/Settings.vue'
+import Trash from '../views/Trash.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -23,6 +24,7 @@ const router = createRouter({
     { path: '/files', name: 'files', component: Files, meta: { requiresUnlock: true } },
     { path: '/calendar', name: 'calendar', component: Calendar, meta: { requiresUnlock: true } },
     { path: '/schedule', name: 'schedule', component: Schedule, meta: { requiresUnlock: true } },
+    { path: '/trash', name: 'trash', component: Trash, meta: { requiresUnlock: true } },
     { path: '/toolbox', name: 'toolbox', component: Toolbox },
     { path: '/settings', name: 'settings', component: Settings, meta: { requiresUnlock: true } },
   ],

@@ -6,6 +6,7 @@ import {
   NCard,
   NCheckbox,
   NColorPicker,
+  NDataTable,
   NDivider,
   NGrid,
   NGi,
@@ -13,16 +14,20 @@ import {
   NInputNumber,
   NModal,
   NProgress,
+  NRadioButton,
+  NRadioGroup,
   NSelect,
   NSlider,
   NSpace,
   NTabPane,
   NTabs,
   NTag,
+  type DataTableColumns,
   useMessage,
 } from 'naive-ui'
 import { Clipboard, Dialogs } from '@wailsio/runtime'
-import { ToolboxService, VaultService, type CompressOptions, type CompressResult, type WatermarkTextOptions } from '../lib/api'
+import { requestSavePath, publishSaved, savedLocationSuffix } from '../lib/saveFile'
+import { ToolboxService, VaultService, type CompressOptions, type CompressResult, type ConvertOptions, type ConvertResult, type WatermarkTextOptions, type PhoneResult, type IDCardResult } from '../lib/api'
 import { t, errText, detailText, cronDescText, ltLabel, presetLabel } from '../lib/i18n'
 
 const message = useMessage()
@@ -370,6 +375,37 @@ async function genIDCards() {
   }
 }
 
+/* ---- phone / id-card lookup (offline) ---- */
+const phInput = ref('')
+const phResult = ref<PhoneResult | null>(null)
+const phLoading = ref(false)
+async function lookupPhone() {
+  if (!phInput.value.trim()) return
+  phLoading.value = true
+  try {
+    phResult.value = await ToolboxService.LookupPhone(phInput.value.trim())
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    phLoading.value = false
+  }
+}
+
+const idInput = ref('')
+const idResult = ref<IDCardResult | null>(null)
+const idLoading = ref(false)
+async function lookupIDCard() {
+  if (!idInput.value.trim()) return
+  idLoading.value = true
+  try {
+    idResult.value = await ToolboxService.LookupIDCard(idInput.value.trim())
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    idLoading.value = false
+  }
+}
+
 /* ---- ssl check ---- */
 type CertInfo = {
   subject: string
@@ -656,6 +692,111 @@ async function doWhois() {
     whoisRunning.value = false
   }
 }
+
+/* ---- ip lookup ---- */
+type IPLookupResult = {
+  input: string
+  ok: boolean
+  message: string
+  query: string
+  country: string
+  countryCode: string
+  region: string
+  city: string
+  zip: string
+  lat: number
+  lon: number
+  timezone: string
+  isp: string
+  org: string
+  as: string
+}
+const ipQuery = ref('')
+const ipBatchText = ref('')
+const ipBatchMode = ref(false)
+const ipTimeout = ref(8)
+const ipTimeoutMS = computed(() => Math.round(ipTimeout.value * 1000))
+const ipResult = ref<IPLookupResult | null>(null)
+const ipBatchResults = ref<IPLookupResult[]>([])
+const ipRunning = ref(false)
+async function doIPLookup() {
+  if (!ipQuery.value.trim()) {
+    message.warning(t('toolbox.ipRequired'))
+    return
+  }
+  ipRunning.value = true
+  ipResult.value = null
+  try {
+    ipResult.value = (await ToolboxService.IPLookup(
+      ipQuery.value.trim(),
+      ipTimeoutMS.value,
+    )) as unknown as IPLookupResult
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    ipRunning.value = false
+  }
+}
+async function doIPLookupBatch() {
+  const list = ipBatchText.value
+    .split(/[\n,;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (!list.length) {
+    message.warning(t('toolbox.ipBatchRequired'))
+    return
+  }
+  ipRunning.value = true
+  ipBatchResults.value = []
+  try {
+    ipBatchResults.value = (await ToolboxService.IPLookupBatch(
+      list,
+      ipTimeoutMS.value,
+    )) as unknown as IPLookupResult[]
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    ipRunning.value = false
+  }
+}
+function ipLocation(r: IPLookupResult): string {
+  return [r.country, r.region, r.city].filter(Boolean).join(' / ')
+}
+type IPBatchRow = {
+  input: string
+  location: string
+  isp: string
+  as: string
+  status: string
+  _ok: boolean
+}
+const ipBatchColumns = computed<DataTableColumns<IPBatchRow>>(() => [
+  { title: t('toolbox.ipColInput'), key: 'input', width: 160 },
+  { title: t('toolbox.ipColLocation'), key: 'location', minWidth: 180 },
+  { title: t('toolbox.ipColIsp'), key: 'isp', minWidth: 160 },
+  { title: t('toolbox.ipColAs'), key: 'as', minWidth: 150 },
+  {
+    title: t('toolbox.ipColStatus'),
+    key: 'status',
+    width: 130,
+    render: (row) =>
+      h(
+        NTag,
+        { size: 'small', type: row._ok ? 'success' : 'warning', bordered: false },
+        { default: () => row.status },
+      ),
+  },
+])
+const ipBatchRows = computed<IPBatchRow[]>(() =>
+  ipBatchResults.value.map((r) => ({
+    input: r.query || r.input,
+    location: r.ok ? ipLocation(r) : '-',
+    isp: r.isp || '-',
+    as: r.as || r.org || '-',
+    status: r.ok ? t('toolbox.ipOk') : r.message || t('toolbox.ipFail'),
+    _ok: r.ok,
+  })),
+)
 
 /* ---- certgen ---- */
 type CertGenResult = {
@@ -1169,13 +1310,17 @@ async function genQR() {
 
 /* ---- image compression ---- */
 const imgPickPaths = ref<string[]>([])
-const imgOutDir = ref('')
 const imgTargetKB = ref<number | null>(null)
 const imgMaxDim = ref<number | null>(null)
 const imgQuality = ref<number | null>(null)
 const imgFormat = ref('auto')
 const imgRunning = ref(false)
 const imgResults = ref<CompressResult[]>([])
+
+/* ---- folder compression: one folder -> one ZIP archive ---- */
+const folderZipPaths = ref<string[]>([])
+const folderZipRunning = ref(false)
+const folderZipResult = ref('')
 
 const imgFormatOptions = [
   { label: t('toolbox.imgFormatAuto'), value: 'auto' },
@@ -1204,12 +1349,6 @@ async function imgPick() {
   imgResults.value = []
 }
 
-async function imgPickDir() {
-  const picked = await Dialogs.OpenFile({ Title: t('toolbox.imgPickDir'), CanChooseDirectories: true, CanChooseFiles: false })
-  const dir = Array.isArray(picked) ? picked[0] : picked
-  if (dir) imgOutDir.value = dir
-}
-
 async function imgRun() {
   if (imgPickPaths.value.length === 0) {
     message.warning(t('toolbox.imgEmpty'))
@@ -1227,20 +1366,39 @@ async function imgRun() {
   }
 }
 
-async function imgSaveAll() {
-  const outDir = imgOutDir.value.trim()
-  if (!outDir) {
-    message.warning(t('toolbox.imgNeedDir'))
+// imgSaveOne stores a single result next to its source (no folder needed).
+async function imgSaveOne(i: number) {
+  const src = imgPickPaths.value[i]
+  const res = imgResults.value[i]
+  if (!src || !res) return
+  const ext = res.mime === 'image/png' ? '.png' : res.mime === 'image/webp' ? '.webp' : '.jpg'
+  const base = src.replace(/\\/g, '/').split('/').pop() ?? 'image'
+  const stem = base.replace(/\.[^.]+$/, '')
+  const filename = stem + '_min' + ext
+  const path = await requestSavePath(t('toolbox.imgSaveOne'), filename)
+  if (!path) return
+  try {
+    await ToolboxService.SaveBytes(path, res.data ?? '')
+    const where = await publishSaved(path, filename)
+    message.success(t('toolbox.imgSavedTo') + (where || path))
+  } catch (e) {
+    message.error(errText(e))
+  }
+}
+
+// imgExportZip packs every compressed result into one ZIP archive.
+async function imgExportZip() {
+  if (imgResults.value.length === 0) {
+    message.warning(t('toolbox.imgNeedResult'))
     return
   }
-  if (imgPickPaths.value.length === 0) {
-    message.warning(t('toolbox.imgEmpty'))
-    return
-  }
+  const path = await requestSavePath(t('toolbox.imgExportZip'), 'images_min.zip')
+  if (!path) return
   imgRunning.value = true
   try {
-    imgResults.value = ((await ToolboxService.CompressBatch(imgPickPaths.value, outDir, imgBuildOpts())) ?? []) as CompressResult[]
-    message.success(t('toolbox.imgSavedTo') + outDir)
+    await ToolboxService.CompressBatchZip(imgPickPaths.value, path, imgBuildOpts())
+    const where = await publishSaved(path, 'images_min.zip')
+    message.success(t('toolbox.imgExportSaved') + (where || path))
   } catch (e) {
     message.error(errText(e))
   } finally {
@@ -1251,6 +1409,140 @@ async function imgSaveAll() {
 function imgClear() {
   imgPickPaths.value = []
   imgResults.value = []
+}
+
+/* ---- image format conversion ---- */
+const cvPickPaths = ref<string[]>([])
+const cvTarget = ref('png')
+const cvQuality = ref<number | null>(null)
+const cvMaxDim = ref<number | null>(null)
+const cvRunning = ref(false)
+const cvResults = ref<ConvertResult[]>([])
+
+const cvTargetOptions = [
+  { label: 'PNG', value: 'png' },
+  { label: 'JPEG', value: 'jpeg' },
+  { label: 'GIF', value: 'gif' },
+  { label: 'BMP', value: 'bmp' },
+  { label: 'TIFF', value: 'tiff' },
+]
+
+function cvExtOf(format: string): string {
+  if (format === 'jpeg') return '.jpg'
+  if (format === 'tiff') return '.tiff'
+  return '.' + format
+}
+
+function cvBuildOpts(): ConvertOptions {
+  return {
+    Target: cvTarget.value,
+    Quality: cvQuality.value ?? 0,
+    MaxDim: cvMaxDim.value ?? 0,
+  }
+}
+
+async function cvPick() {
+  const picked = await Dialogs.OpenFile({
+    Title: t('toolbox.cvPick'),
+    AllowsMultipleSelection: true,
+    Filters: [{ DisplayName: t('toolbox.cvTab'), Pattern: '*.jpg;*.jpeg;*.png;*.gif;*.bmp;*.webp;*.tif;*.tiff' }],
+  })
+  const paths = Array.isArray(picked) ? picked : picked ? [picked] : []
+  if (paths.length === 0) return
+  cvPickPaths.value = paths
+  cvResults.value = []
+}
+
+async function cvRun() {
+  if (cvPickPaths.value.length === 0) {
+    message.warning(t('toolbox.cvEmpty'))
+    return
+  }
+  cvRunning.value = true
+  try {
+    cvResults.value = ((await ToolboxService.ConvertBatch(cvPickPaths.value, '', cvBuildOpts())) ?? []) as ConvertResult[]
+    message.success(t('toolbox.cvDone'))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cvRunning.value = false
+  }
+}
+
+async function cvSaveOne(i: number) {
+  const src = cvPickPaths.value[i]
+  const res = cvResults.value[i]
+  if (!src || !res) return
+  const base = src.replace(/\\/g, '/').split('/').pop() ?? 'image'
+  const stem = base.replace(/\.[^.]+$/, '')
+  const filename = stem + '_conv' + cvExtOf(res.toFormat)
+  const path = await requestSavePath(t('toolbox.cvSaveOne'), filename)
+  if (!path) return
+  try {
+    await ToolboxService.SaveBytes(path, res.data ?? '')
+    const where = await publishSaved(path, filename)
+    message.success(t('toolbox.cvSavedTo') + (where || path))
+  } catch (e) {
+    message.error(errText(e))
+  }
+}
+
+async function cvExportZip() {
+  if (cvResults.value.length === 0) {
+    message.warning(t('toolbox.cvNeedResult'))
+    return
+  }
+  const path = await requestSavePath(t('toolbox.cvExportZip'), 'images_conv.zip')
+  if (!path) return
+  cvRunning.value = true
+  try {
+    await ToolboxService.ConvertBatchZip(cvPickPaths.value, path, cvBuildOpts())
+    const where = await publishSaved(path, 'images_conv.zip')
+    message.success(t('toolbox.cvExportSaved') + (where || path))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cvRunning.value = false
+  }
+}
+
+function cvClear() {
+  cvPickPaths.value = []
+  cvResults.value = []
+}
+
+/* ---- folder compression ---- */
+async function folderZipPick() {
+  const picked = await Dialogs.OpenFile({
+    Title: t('toolbox.folderZipPick'),
+    AllowsMultipleSelection: true,
+    CanChooseDirectories: true,
+    CanChooseFiles: false,
+  })
+  folderZipPaths.value = Array.isArray(picked) ? picked : picked ? [picked] : []
+  folderZipResult.value = ''
+}
+
+async function folderZipRun() {
+  if (folderZipPaths.value.length === 0) {
+    message.warning(t('toolbox.folderZipEmpty'))
+    return
+  }
+  folderZipRunning.value = true
+  try {
+    const created = (await ToolboxService.CompressFoldersZip(folderZipPaths.value)) ?? []
+    folderZipResult.value = created.join('\n')
+    message.success(t('toolbox.folderZipDone', { n: created.length }))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    folderZipRunning.value = false
+  }
+}
+
+function folderZipClear() {
+  folderZipPaths.value = []
+  folderZipResult.value = ''
 }
 
 function fmtBytes(n: number): string {
@@ -1266,7 +1558,6 @@ function pct(n: number): string {
 /* ---- watermark ---- */
 const wmPaths = ref<string[]>([])
 const wmActive = ref(0)
-const wmOutDir = ref('')
 const wmText = ref('内部资料 请勿外传')
 const wmFontSize = ref(48)
 const wmFont = ref('sans')
@@ -1274,7 +1565,11 @@ const wmColor = ref('#ff3b30')
 const wmOpacity = ref(0.35)
 const wmRotation = ref(-30)
 const wmDiagonal = ref(false)
+// Page rotation is an editing parameter (multiple of 90): preview and export
+// both apply it together with the watermark.
+const wmPageRotation = ref(0)
 const wmTile = ref(false)
+const wmDensity = ref(50)
 const wmAnchor = ref('center')
 const wmOnTop = ref(true)
 const wmPages = ref('')
@@ -1288,6 +1583,10 @@ const wmFontOptions = [
   { label: t('toolbox.wmFontSerif'), value: 'serif' },
   { label: t('toolbox.wmFontMono'), value: 'mono' },
 ]
+// Tile density is a percentage (20..300, higher = tighter). A slider lets the
+// user pick any value instead of a handful of fixed presets.
+const WM_DENSITY_MIN = 20
+const WM_DENSITY_MAX = 300
 const wmAnchorOptions = [
   { label: t('toolbox.wmAnchorCenter'), value: 'center' },
   { label: t('toolbox.wmAnchorTopLeft'), value: 'tl' },
@@ -1318,6 +1617,8 @@ function wmBuildOpts(): WatermarkTextOptions {
     anchor: wmAnchor.value,
     onTop: wmOnTop.value,
     scale: 0,
+    density: wmDensity.value,
+    pageRotation: wmPageRotation.value,
   }
 }
 
@@ -1339,12 +1640,6 @@ async function wmPick() {
   wmPreviewErr.value = ''
   wmInfo.value = ''
   await wmPreview()
-}
-
-async function wmPickDir() {
-  const picked = await Dialogs.OpenFile({ Title: t('toolbox.wmPickDir'), CanChooseDirectories: true, CanChooseFiles: false })
-  const dir = Array.isArray(picked) ? picked[0] : picked
-  if (dir) wmOutDir.value = dir
 }
 
 function wmClear() {
@@ -1382,29 +1677,38 @@ async function wmPreview() {
   }
 }
 
-async function wmApplyAll() {
+// wmExport writes the watermarked result. A single file is saved via a save
+// dialog; multiple files are packed into one ZIP archive.
+async function wmExport() {
   if (wmPaths.value.length === 0) {
     message.warning(t('toolbox.wmEmpty'))
     return
   }
-  const outDir = wmOutDir.value.trim()
-  if (!outDir) {
-    message.warning(t('toolbox.wmNeedDir'))
-    return
-  }
   wmRunning.value = true
-  let ok = 0
   try {
-    for (const path of wmPaths.value) {
-      const out = await ToolboxService.WatermarkOutputPath(path, outDir, '_wm')
+    if (wmPaths.value.length === 1) {
+      const path = wmPaths.value[0]
+      const base = path.replace(/\\/g, '/').split('/').pop() ?? 'file'
+      const stem = base.replace(/\.[^.]+$/, '')
+      const ext = wmIsPdf(path) ? '.pdf' : base.replace(/^.*(\.[^.]+)$/, '$1')
+      const name = stem + '_wm' + ext
+      const dest = await requestSavePath(t('toolbox.wmApply'), name)
+      if (!dest) return
       if (wmIsPdf(path)) {
-        await ToolboxService.WatermarkPDF(path, out, wmPages.value, wmBuildOpts())
+        await ToolboxService.WatermarkPDF(path, dest, wmPages.value, wmBuildOpts())
       } else {
-        await ToolboxService.WatermarkImage(path, out, wmBuildOpts())
+        await ToolboxService.WatermarkImage(path, dest, wmBuildOpts())
       }
-      ok++
+      const where = await publishSaved(dest, name)
+      message.success(t('toolbox.wmDone', { n: 1 }) + savedLocationSuffix(where))
+    } else {
+      const name = 'watermarked.zip'
+      const dest = await requestSavePath(t('toolbox.wmExportZip'), name)
+      if (!dest) return
+      await ToolboxService.WatermarkBatchZip(wmPaths.value, dest, wmPages.value, wmBuildOpts())
+      const where = await publishSaved(dest, name)
+      message.success(t('toolbox.wmExportSaved') + (where || dest))
     }
-    message.success(t('toolbox.wmDone', { n: ok }))
   } catch (e) {
     message.error(errText(e))
   } finally {
@@ -1412,34 +1716,17 @@ async function wmApplyAll() {
   }
 }
 
+// wmRotate toggles the page-rotation editing parameter (cumulative, multiple
+// of 90). The preview refreshes immediately; the rotation is applied together
+// with the watermark on export, so no separate _rot file is produced.
 async function wmRotate(deg: number) {
-  if (wmPaths.value.length === 0) {
-    message.warning(t('toolbox.wmEmpty'))
-    return
-  }
-  const outDir = wmOutDir.value.trim()
-  if (!outDir) {
-    message.warning(t('toolbox.wmNeedDir'))
-    return
-  }
-  wmRunning.value = true
-  let ok = 0
-  try {
-    for (const path of wmPaths.value) {
-      const out = await ToolboxService.WatermarkOutputPath(path, outDir, '_rot')
-      if (wmIsPdf(path)) {
-        await ToolboxService.RotatePDF(path, out, deg, wmPages.value)
-      } else {
-        await ToolboxService.RotateImage(path, out, deg)
-      }
-      ok++
-    }
-    message.success(t('toolbox.wmDone', { n: ok }))
-  } catch (e) {
-    message.error(errText(e))
-  } finally {
-    wmRunning.value = false
-  }
+  wmPageRotation.value = (((wmPageRotation.value + deg) % 360) + 360) % 360
+  if (wmPaths.value.length > 0) await wmPreview()
+}
+
+async function wmResetRotation() {
+  wmPageRotation.value = 0
+  if (wmPaths.value.length > 0) await wmPreview()
 }
 
 </script>
@@ -1449,7 +1736,188 @@ async function wmRotate(deg: number) {
     <h3 class="page-title">{{ t('toolbox.title') }}</h3>
     <n-tabs type="line" animated pane-class="tb-pane" pane-style="overflow-y: auto; max-height: calc(100vh - 150px); padding-right: 4px" :theme-overrides="{ tabFontWeight: '500' }">
       <n-tab-pane name="catDaily" :tab="t('toolbox.catDailyTab')">
-        <n-tabs type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
+        <n-tabs class="tb-subtabs" type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
+    <n-tab-pane name="imgcmp" :tab="t('toolbox.imgTab')">
+            <n-card size="small">
+              <n-space vertical>
+                <div class="tb-hint">{{ t('toolbox.imgDesc') }}</div>
+                <n-space align="center">
+                  <n-button size="small" type="primary" @click="imgPick">{{ t('toolbox.imgPick') }}</n-button>
+                  <n-button size="small" :disabled="imgPickPaths.length === 0" @click="imgClear">{{ t('toolbox.imgClear') }}</n-button>
+                  <n-tag size="small" :bordered="false">{{ imgPickPaths.length }}</n-tag>
+                </n-space>
+                <n-space align="center">
+                  <n-input-number v-model:value="imgTargetKB" :min="0" :max="51200" :placeholder="t('toolbox.imgNoTarget')" style="width: 150px">
+                    <template #suffix>KB</template>
+                  </n-input-number>
+                  <n-input-number v-model:value="imgMaxDim" :min="0" :max="20000" :placeholder="t('toolbox.imgDimAuto')" style="width: 150px" />
+                  <n-input-number v-model:value="imgQuality" :min="0" :max="100" :placeholder="t('toolbox.imgQuality')" style="width: 130px" />
+                  <n-select v-model:value="imgFormat" :options="imgFormatOptions" style="width: 130px" />
+                </n-space>
+                <n-space align="center">
+                  <n-button size="small" type="primary" :loading="imgRunning" @click="imgRun">{{ t('toolbox.imgRun') }}</n-button>
+                </n-space>
+                <div class="tb-hint">{{ t('toolbox.imgExportHint') }}</div>
+                <div v-if="imgResults.length === 0" class="tb-hint">{{ t('toolbox.imgNoImages') }}</div>
+                <div v-else class="imgcmp-table">
+                  <div class="imgcmp-row imgcmp-head">
+                    <span>{{ t('toolbox.imgResults') }}</span>
+                    <span>{{ t('toolbox.imgOrig') }}</span>
+                    <span>{{ t('toolbox.imgNew') }}</span>
+                    <span>{{ t('toolbox.imgSaveAll') }}</span>
+                  </div>
+                  <div v-for="(r, i) in imgResults" :key="i" class="imgcmp-row">
+                    <span class="imgcmp-name" :title="r.name">{{ r.name }}</span>
+                    <span>{{ fmtBytes(r.origSize) }}</span>
+                    <span>{{ fmtBytes(r.newSize) }} · {{ pct(r.ratio) }}</span>
+                    <n-button size="tiny" @click="imgSaveOne(i)">{{ t('toolbox.imgSaveOne') }}</n-button>
+                  </div>
+                </div>
+                <n-space v-if="imgResults.length > 0" align="center">
+                  <n-button size="small" type="primary" :loading="imgRunning" @click="imgExportZip">{{ t('toolbox.imgExportZip') }}</n-button>
+                </n-space>
+                <n-divider style="margin: 4px 0" />
+                <div class="tb-hint">{{ t('toolbox.folderZipDesc') }}</div>
+                <n-space align="center">
+                  <n-button size="small" @click="folderZipPick">{{ t('toolbox.folderZipPick') }}</n-button>
+                  <n-button size="small" :disabled="folderZipPaths.length === 0" @click="folderZipClear">{{ t('toolbox.imgClear') }}</n-button>
+                  <n-tag size="small" :bordered="false">{{ folderZipPaths.length }}</n-tag>
+                  <n-button size="small" type="primary" :loading="folderZipRunning" :disabled="folderZipPaths.length === 0" @click="folderZipRun">{{ t('toolbox.folderZipRun') }}</n-button>
+                </n-space>
+                <pre v-if="folderZipResult" class="tb-hint" style="white-space: pre-wrap; margin: 0">{{ t('toolbox.folderZipSaved') }}{{ '\n' }}{{ folderZipResult }}</pre>
+              </n-space>
+            </n-card>
+          </n-tab-pane>
+    <n-tab-pane name="imgconv" :tab="t('toolbox.cvTab')">
+            <n-card size="small">
+              <n-space vertical>
+                <div class="tb-hint">{{ t('toolbox.cvDesc') }}</div>
+                <n-space align="center">
+                  <n-button size="small" type="primary" @click="cvPick">{{ t('toolbox.cvPick') }}</n-button>
+                  <n-button size="small" :disabled="cvPickPaths.length === 0" @click="cvClear">{{ t('toolbox.cvClear') }}</n-button>
+                  <n-tag size="small" :bordered="false">{{ cvPickPaths.length }}</n-tag>
+                </n-space>
+                <n-space align="center">
+                  <span class="txt-label">{{ t('toolbox.cvTarget') }}</span>
+                  <n-select v-model:value="cvTarget" :options="cvTargetOptions" style="width: 130px" />
+                  <n-input-number v-model:value="cvQuality" :min="0" :max="100" :placeholder="t('toolbox.cvQuality')" style="width: 140px" />
+                  <n-input-number v-model:value="cvMaxDim" :min="0" :max="20000" :placeholder="t('toolbox.cvDimAuto')" style="width: 150px" />
+                </n-space>
+                <n-space align="center">
+                  <n-button size="small" type="primary" :loading="cvRunning" @click="cvRun">{{ t('toolbox.cvRun') }}</n-button>
+                </n-space>
+                <div class="tb-hint">{{ t('toolbox.cvExportHint') }}</div>
+                <div v-if="cvResults.length === 0" class="tb-hint">{{ t('toolbox.cvNoImages') }}</div>
+                <div v-else class="imgcmp-table">
+                  <div class="imgcmp-row imgcmp-head">
+                    <span>{{ t('toolbox.cvResults') }}</span>
+                    <span>{{ t('toolbox.cvFromTo') }}</span>
+                    <span>{{ t('toolbox.cvSize') }}</span>
+                    <span>{{ t('toolbox.cvSaveAll') }}</span>
+                  </div>
+                  <div v-for="(r, i) in cvResults" :key="i" class="imgcmp-row">
+                    <span class="imgcmp-name" :title="r.name">{{ r.name }}</span>
+                    <span>{{ (r.fromExt || '?').toUpperCase() }} → {{ r.toFormat.toUpperCase() }}</span>
+                    <span>{{ r.width }}×{{ r.height }} · {{ fmtBytes(r.size) }}</span>
+                    <n-button size="tiny" @click="cvSaveOne(i)">{{ t('toolbox.cvSaveOne') }}</n-button>
+                  </div>
+                </div>
+                <n-space v-if="cvResults.length > 0" align="center">
+                  <n-button size="small" type="primary" :loading="cvRunning" @click="cvExportZip">{{ t('toolbox.cvExportZip') }}</n-button>
+                </n-space>
+              </n-space>
+            </n-card>
+          </n-tab-pane>
+    <n-tab-pane name="watermark" :tab="t('toolbox.wmTab')">
+            <n-card size="small">
+              <n-space vertical>
+                <div class="tb-hint">{{ t('toolbox.wmDesc') }}</div>
+                <n-space align="center">
+                  <n-button size="small" type="primary" @click="wmPick">{{ t('toolbox.wmPick') }}</n-button>
+                  <n-button size="small" :disabled="wmPaths.length === 0" @click="wmClear">{{ t('toolbox.wmClear') }}</n-button>
+                  <n-tag size="small" :bordered="false">{{ t('toolbox.wmFileCount', { n: wmPaths.length }) }}</n-tag>
+                  <n-tag v-if="wmInfo" size="small" type="info" :bordered="false">{{ wmInfo }}</n-tag>
+                </n-space>
+                <n-space v-if="wmPaths.length > 0" align="center" :wrap="true">
+                  <n-tag
+                    v-for="(p, i) in wmPaths"
+                    :key="i"
+                    size="small"
+                    :bordered="false"
+                    :type="i === wmActive ? 'primary' : 'default'"
+                    style="cursor: pointer; max-width: 280px"
+                    :title="p"
+                    @click="wmSelectActive(i)"
+                  >
+                    {{ p.split('/').pop() }}
+                  </n-tag>
+                </n-space>
+                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
+                  <span class="txt-label">{{ t('toolbox.wmText') }}</span>
+                  <n-input v-model:value="wmText" size="small" :placeholder="t('toolbox.wmTextPlaceholder')" style="width: 240px" />
+                  <span class="txt-label">{{ t('toolbox.wmFontSize') }}</span>
+                  <n-input-number v-model:value="wmFontSize" :min="6" :max="400" size="small" style="width: 110px" />
+                  <n-select v-model:value="wmFont" :options="wmFontOptions" size="small" style="width: 120px" />
+                  <span class="txt-label">{{ t('toolbox.wmColor') }}</span>
+                  <n-color-picker v-model:value="wmColor" size="small" :show-alpha="false" style="width: 90px" />
+                </n-space>
+                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
+                  <span class="txt-label">{{ t('toolbox.wmOpacity') }}</span>
+                  <n-slider v-model:value="wmOpacity" :min="0.05" :max="1" :step="0.05" style="width: 150px" />
+                  <span class="txt-label">{{ t('toolbox.wmRotation') }}</span>
+                  <n-slider v-model:value="wmRotation" :min="-180" :max="180" :step="1" :disabled="wmDiagonal" style="width: 150px" />
+                  <span class="txt-label">{{ wmRotation }}°</span>
+                  <n-checkbox v-model:checked="wmDiagonal">{{ t('toolbox.wmDiagonal') }}</n-checkbox>
+                  <n-checkbox v-model:checked="wmTile">{{ t('toolbox.wmTile') }}</n-checkbox>
+                  <span class="txt-label">{{ t('toolbox.wmDensity') }}</span>
+                  <n-slider
+                    v-model:value="wmDensity"
+                    :min="WM_DENSITY_MIN"
+                    :max="WM_DENSITY_MAX"
+                    :step="1"
+                    :disabled="!wmTile"
+                    style="width: 150px"
+                  />
+                  <n-input-number
+                    v-model:value="wmDensity"
+                    :min="WM_DENSITY_MIN"
+                    :max="WM_DENSITY_MAX"
+                    size="small"
+                    style="width: 110px"
+                    :disabled="!wmTile"
+                  >
+                    <template #suffix>%</template>
+                  </n-input-number>
+                  <span class="tb-hint">{{ t('toolbox.wmDensityHint') }}</span>
+                </n-space>
+                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
+                  <span class="txt-label">{{ t('toolbox.wmAnchor') }}</span>
+                  <n-select v-model:value="wmAnchor" :options="wmAnchorOptions" size="small" style="width: 130px" />
+                  <n-checkbox v-model:checked="wmOnTop">{{ t('toolbox.wmOnTop') }}</n-checkbox>
+                  <span class="txt-label">{{ t('toolbox.wmPages') }}</span>
+                  <n-input v-model:value="wmPages" size="small" :placeholder="t('toolbox.wmPagesPlaceholder')" style="width: 220px" />
+                </n-space>
+                <div class="tb-hint">{{ t('toolbox.wmExportHint') }}</div>
+                <n-space align="center" :wrap="true">
+                  <n-button size="small" type="primary" :loading="wmRunning" :disabled="wmPaths.length === 0" @click="wmExport">
+                    {{ wmPaths.length > 1 ? t('toolbox.wmExportZip') : t('toolbox.wmApply') }}
+                  </n-button>
+                  <n-button size="small" @click="wmPreview" :disabled="wmPaths.length === 0">{{ t('toolbox.wmPreview') }}</n-button>
+                  <n-divider vertical />
+                  <span class="txt-label">{{ t('toolbox.wmPageRotate') }}</span>
+                  <n-button size="small" @click="wmRotate(90)">{{ t('toolbox.wmRot90') }}</n-button>
+                  <n-button size="small" @click="wmRotate(180)">{{ t('toolbox.wmRot180') }}</n-button>
+                  <n-button size="small" @click="wmRotate(270)">{{ t('toolbox.wmRot270') }}</n-button>
+                  <n-button size="small" :disabled="wmPageRotation === 0" @click="wmResetRotation">{{ t('toolbox.wmRotReset') }}</n-button>
+                  <n-tag size="small" :bordered="false" :type="wmPageRotation !== 0 ? 'primary' : 'default'">{{ wmPageRotation }}°</n-tag>
+                </n-space>
+                <div class="wm-preview">
+                  <img v-if="wmPreviewUrl" :src="wmPreviewUrl" alt="preview" />
+                  <div v-else class="tb-hint">{{ wmPreviewErr || t('toolbox.wmPreviewHint') }}</div>
+                </div>
+              </n-space>
+            </n-card>
+          </n-tab-pane>
     <n-tab-pane name="pwgen" :tab="t('toolbox.pwgenTab')">
             <n-card size="small">
               <n-space vertical size="large">
@@ -1545,124 +2013,62 @@ async function wmRotate(deg: number) {
               </n-space>
             </n-card>
           </n-tab-pane>
-    <n-tab-pane name="imgcmp" :tab="t('toolbox.imgTab')">
+    <n-tab-pane name="idlookup" :tab="t('toolbox.idlookupTab')">
             <n-card size="small">
               <n-space vertical>
-                <div class="tb-hint">{{ t('toolbox.imgDesc') }}</div>
+                <n-divider title-placement="left" style="margin: 0">{{ t('toolbox.phoneSection') }}</n-divider>
                 <n-space align="center">
-                  <n-button size="small" type="primary" @click="imgPick">{{ t('toolbox.imgPick') }}</n-button>
-                  <n-button size="small" :disabled="imgPickPaths.length === 0" @click="imgClear">{{ t('toolbox.imgClear') }}</n-button>
-                  <n-tag size="small" :bordered="false">{{ imgPickPaths.length }}</n-tag>
+                  <n-input v-model:value="phInput" :placeholder="t('toolbox.phonePlaceholder')" style="width: 260px" @keyup.enter="lookupPhone" />
+                  <n-button size="small" type="primary" :loading="phLoading" @click="lookupPhone">{{ t('toolbox.lookup') }}</n-button>
                 </n-space>
+                <n-alert v-if="phResult && !phResult.ok" type="warning" :show-icon="true">{{ phResult.message || t('toolbox.phoneNotFound') }}</n-alert>
+                <n-descriptions v-if="phResult && phResult.ok" :column="2" bordered size="small" label-placement="left" style="max-width: 640px">
+                  <n-descriptions-item :label="t('toolbox.phoneNumber')">{{ phResult.input }}</n-descriptions-item>
+                  <n-descriptions-item :label="t('toolbox.phoneOperator')">{{ phResult.operator }}</n-descriptions-item>
+                  <n-descriptions-item :label="t('toolbox.phoneProvince')">{{ phResult.province || '-' }}</n-descriptions-item>
+                  <n-descriptions-item :label="t('toolbox.phoneCity')">{{ phResult.city || '-' }}</n-descriptions-item>
+                  <n-descriptions-item :label="t('toolbox.phoneAreaCode')">{{ phResult.areaCode || '-' }}</n-descriptions-item>
+                  <n-descriptions-item :label="t('toolbox.phoneZip')">{{ phResult.zipCode || '-' }}</n-descriptions-item>
+                </n-descriptions>
+                <n-text v-if="phResult && phResult.ok" depth="3" style="font-size: 12px">
+                  {{ t('toolbox.phoneDataVersion') }}: {{ phResult.dataVersion }}
+                </n-text>
+
+                <n-divider title-placement="left" style="margin: 12px 0 0">{{ t('toolbox.idSection') }}</n-divider>
                 <n-space align="center">
-                  <n-input-number v-model:value="imgTargetKB" :min="0" :max="51200" :placeholder="t('toolbox.imgNoTarget')" style="width: 150px">
-                    <template #suffix>KB</template>
-                  </n-input-number>
-                  <n-input-number v-model:value="imgMaxDim" :min="0" :max="20000" :placeholder="t('toolbox.imgDimAuto')" style="width: 150px" />
-                  <n-input-number v-model:value="imgQuality" :min="0" :max="100" :placeholder="t('toolbox.imgQuality')" style="width: 130px" />
-                  <n-select v-model:value="imgFormat" :options="imgFormatOptions" style="width: 130px" />
+                  <n-input v-model:value="idInput" :placeholder="t('toolbox.idPlaceholder')" style="width: 320px" @keyup.enter="lookupIDCard" />
+                  <n-button size="small" type="primary" :loading="idLoading" @click="lookupIDCard">{{ t('toolbox.lookup') }}</n-button>
                 </n-space>
-                <n-space align="center">
-                  <n-input v-model:value="imgOutDir" :placeholder="t('toolbox.imgPickDir')" style="width: 360px" />
-                  <n-button size="small" @click="imgPickDir">{{ t('toolbox.imgPickDir') }}</n-button>
-                  <n-button size="small" type="primary" :loading="imgRunning" @click="imgRun">{{ t('toolbox.imgRun') }}</n-button>
-                  <n-button size="small" :disabled="imgPickPaths.length === 0" @click="imgSaveAll">{{ t('toolbox.imgSaveAll') }}</n-button>
-                </n-space>
-                <div v-if="imgResults.length === 0" class="tb-hint">{{ t('toolbox.imgNoImages') }}</div>
-                <div v-else class="imgcmp-table">
-                  <div class="imgcmp-row imgcmp-head">
-                    <span>{{ t('toolbox.imgResults') }}</span>
-                    <span>{{ t('toolbox.imgOrig') }}</span>
-                    <span>{{ t('toolbox.imgNew') }}</span>
-                    <span></span>
-                  </div>
-                  <div v-for="(r, i) in imgResults" :key="i" class="imgcmp-row">
-                    <span class="imgcmp-name" :title="r.name">{{ r.name }}</span>
-                    <span>{{ fmtBytes(r.origSize) }}</span>
-                    <span>{{ fmtBytes(r.newSize) }} · {{ pct(r.ratio) }}</span>
-                    <n-tag size="tiny" :bordered="false" :type="r.targetMet ? 'success' : 'warning'">
-                      {{ r.targetMet ? t('toolbox.imgTargetMet') : t('toolbox.imgTargetMiss') }}
+                <template v-if="idResult">
+                  <n-space align="center">
+                    <n-tag :type="idResult.valid ? 'success' : 'error'" size="small">
+                      {{ idResult.valid ? t('toolbox.idValid') : t('toolbox.idInvalid') }}
                     </n-tag>
-                  </div>
-                </div>
-              </n-space>
-            </n-card>
-          </n-tab-pane>
-    <n-tab-pane name="watermark" :tab="t('toolbox.wmTab')">
-            <n-card size="small">
-              <n-space vertical>
-                <div class="tb-hint">{{ t('toolbox.wmDesc') }}</div>
-                <n-space align="center">
-                  <n-button size="small" type="primary" @click="wmPick">{{ t('toolbox.wmPick') }}</n-button>
-                  <n-button size="small" :disabled="wmPaths.length === 0" @click="wmClear">{{ t('toolbox.wmClear') }}</n-button>
-                  <n-tag size="small" :bordered="false">{{ t('toolbox.wmFileCount', { n: wmPaths.length }) }}</n-tag>
-                  <n-tag v-if="wmInfo" size="small" type="info" :bordered="false">{{ wmInfo }}</n-tag>
-                </n-space>
-                <n-space v-if="wmPaths.length > 0" align="center" :wrap="true">
-                  <n-tag
-                    v-for="(p, i) in wmPaths"
-                    :key="i"
-                    size="small"
-                    :bordered="false"
-                    :type="i === wmActive ? 'primary' : 'default'"
-                    style="cursor: pointer; max-width: 280px"
-                    :title="p"
-                    @click="wmSelectActive(i)"
-                  >
-                    {{ p.split('/').pop() }}
-                  </n-tag>
-                </n-space>
-                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
-                  <span class="txt-label">{{ t('toolbox.wmText') }}</span>
-                  <n-input v-model:value="wmText" size="small" :placeholder="t('toolbox.wmTextPlaceholder')" style="width: 240px" />
-                  <span class="txt-label">{{ t('toolbox.wmFontSize') }}</span>
-                  <n-input-number v-model:value="wmFontSize" :min="6" :max="400" size="small" style="width: 110px" />
-                  <n-select v-model:value="wmFont" :options="wmFontOptions" size="small" style="width: 120px" />
-                  <span class="txt-label">{{ t('toolbox.wmColor') }}</span>
-                  <n-color-picker v-model:value="wmColor" size="small" :show-alpha="false" style="width: 90px" />
-                </n-space>
-                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
-                  <span class="txt-label">{{ t('toolbox.wmOpacity') }}</span>
-                  <n-slider v-model:value="wmOpacity" :min="0.05" :max="1" :step="0.05" style="width: 150px" />
-                  <span class="txt-label">{{ t('toolbox.wmRotation') }}</span>
-                  <n-slider v-model:value="wmRotation" :min="-180" :max="180" :step="1" :disabled="wmDiagonal" style="width: 150px" />
-                  <span class="txt-label">{{ wmRotation }}°</span>
-                  <n-checkbox v-model:checked="wmDiagonal">{{ t('toolbox.wmDiagonal') }}</n-checkbox>
-                  <n-checkbox v-model:checked="wmTile">{{ t('toolbox.wmTile') }}</n-checkbox>
-                </n-space>
-                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
-                  <span class="txt-label">{{ t('toolbox.wmAnchor') }}</span>
-                  <n-select v-model:value="wmAnchor" :options="wmAnchorOptions" size="small" style="width: 130px" />
-                  <n-checkbox v-model:checked="wmOnTop">{{ t('toolbox.wmOnTop') }}</n-checkbox>
-                  <span class="txt-label">{{ t('toolbox.wmPages') }}</span>
-                  <n-input v-model:value="wmPages" size="small" :placeholder="t('toolbox.wmPagesPlaceholder')" style="width: 220px" />
-                </n-space>
-                <n-space align="center">
-                  <n-input v-model:value="wmOutDir" size="small" :placeholder="t('toolbox.wmPickDir')" style="width: 360px" />
-                  <n-button size="small" @click="wmPickDir">{{ t('toolbox.wmPickDir') }}</n-button>
-                </n-space>
-                <n-space align="center" :wrap="true">
-                  <n-button size="small" type="primary" :loading="wmRunning" :disabled="wmPaths.length === 0" @click="wmApplyAll">
-                    {{ t('toolbox.wmApplyBatch') }}
-                  </n-button>
-                  <n-button size="small" @click="wmPreview" :disabled="wmPaths.length === 0">{{ t('toolbox.wmPreview') }}</n-button>
-                  <n-divider vertical />
-                  <span class="txt-label">{{ t('toolbox.wmRotateImg') }} / {{ t('toolbox.wmRotatePdf') }}</span>
-                  <n-button size="small" :disabled="wmPaths.length === 0" :loading="wmRunning" @click="wmRotate(90)">{{ t('toolbox.wmRot90') }}</n-button>
-                  <n-button size="small" :disabled="wmPaths.length === 0" :loading="wmRunning" @click="wmRotate(180)">{{ t('toolbox.wmRot180') }}</n-button>
-                  <n-button size="small" :disabled="wmPaths.length === 0" :loading="wmRunning" @click="wmRotate(270)">{{ t('toolbox.wmRot270') }}</n-button>
-                </n-space>
-                <div class="wm-preview">
-                  <img v-if="wmPreviewUrl" :src="wmPreviewUrl" alt="preview" />
-                  <div v-else class="tb-hint">{{ wmPreviewErr || t('toolbox.wmPreviewHint') }}</div>
-                </div>
+                    <n-text depth="3" style="font-size: 12px">{{ t('toolbox.idOfflineHint') }}</n-text>
+                  </n-space>
+                  <n-alert v-if="idResult.reasons && idResult.reasons.length" type="error" :show-icon="true">
+                    <div v-for="(r, i) in idResult.reasons" :key="i">· {{ r }}</div>
+                  </n-alert>
+                  <n-descriptions :column="2" bordered size="small" label-placement="left" style="max-width: 640px">
+                    <n-descriptions-item :label="t('toolbox.phoneNumber')">{{ idResult.input }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.idChecksum')">
+                      {{ idResult.checksumOk ? '✓' : '✗' }}
+                    </n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.phoneProvince')">{{ idResult.province || '-' }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.phoneCity')">{{ idResult.city || '-' }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.idDistrict')">{{ idResult.district || '-' }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.idBirthday')">{{ idResult.birthday || '-' }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.idGender')">{{ idResult.gender || '-' }}</n-descriptions-item>
+                    <n-descriptions-item :label="t('toolbox.idLength')">{{ idResult.length }}</n-descriptions-item>
+                  </n-descriptions>
+                </template>
               </n-space>
             </n-card>
           </n-tab-pane>
         </n-tabs>
       </n-tab-pane>
       <n-tab-pane name="catText" :tab="t('toolbox.catTextTab')">
-        <n-tabs type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
+        <n-tabs class="tb-subtabs" type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
     <n-tab-pane name="text" :tab="t('toolbox.textTab')">
             <n-card size="small">
               <n-space vertical size="large">
@@ -1832,7 +2238,7 @@ async function wmRotate(deg: number) {
         </n-tabs>
       </n-tab-pane>
       <n-tab-pane name="catOps" :tab="t('toolbox.catOpsTab')">
-        <n-tabs type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
+        <n-tabs class="tb-subtabs" type="segment" animated pane-class="tb-pane" style="margin-top: 4px">
     <n-tab-pane name="ssl" :tab="t('toolbox.sslTab')">
             <n-card size="small">
               <n-space vertical>
@@ -2066,6 +2472,74 @@ async function wmRotate(deg: number) {
                     <n-button size="tiny" quaternary @click="copy(whoisResult.raw)">{{ t('toolbox.copy') }}</n-button>
                   </n-space>
                   <n-input v-if="whoisShowRaw" type="textarea" :autosize="{ minRows: 6, maxRows: 16 }" readonly :value="whoisResult.raw" />
+                </template>
+              </n-space>
+            </n-card>
+          </n-tab-pane>
+    <n-tab-pane name="iplookup" :tab="t('toolbox.ipTab')">
+            <n-card size="small">
+              <n-space vertical>
+                <n-space align="center" :wrap="true" item-style="display:flex;align-items:center;gap:6px">
+                  <n-radio-group v-model:value="ipBatchMode" size="small">
+                    <n-radio-button :value="false">{{ t('toolbox.ipSingle') }}</n-radio-button>
+                    <n-radio-button :value="true">{{ t('toolbox.ipBatch') }}</n-radio-button>
+                  </n-radio-group>
+                  <span class="txt-label">{{ t('toolbox.ipTimeout') }}</span>
+                  <n-input-number v-model:value="ipTimeout" :min="1" :max="30" :step="1" size="small" style="width: 110px">
+                    <template #suffix>s</template>
+                  </n-input-number>
+                </n-space>
+
+                <template v-if="!ipBatchMode">
+                  <n-space align="center">
+                    <n-input v-model:value="ipQuery" :placeholder="t('toolbox.ipPlaceholder')" style="width: 340px" @keyup.enter="doIPLookup" />
+                    <n-button size="small" type="primary" :loading="ipRunning" @click="doIPLookup">{{ t('toolbox.ipQuery') }}</n-button>
+                  </n-space>
+                  <div class="tb-hint">{{ t('toolbox.ipEmptyHint') }}</div>
+                  <template v-if="ipResult">
+                    <n-alert v-if="!ipResult.ok" type="warning" :show-icon="false">{{ ipResult.message || t('toolbox.ipFail') }}</n-alert>
+                    <template v-else>
+                      <n-space align="center">
+                        <n-tag size="small" type="success" :bordered="false">{{ ipResult.query }}</n-tag>
+                        <n-tag size="small" :bordered="false">{{ ipLocation(ipResult) || '-' }}</n-tag>
+                        <n-button size="tiny" quaternary @click="copy(`${ipResult.query} ${ipLocation(ipResult)} ${ipResult.isp}`)">{{ t('toolbox.copy') }}</n-button>
+                      </n-space>
+                      <n-grid :cols="3" :x-gap="12" :y-gap="6">
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipCountry') }}</span>{{ ipResult.country || '-' }}<span v-if="ipResult.countryCode"> ({{ ipResult.countryCode }})</span></n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipRegion') }}</span>{{ ipResult.region || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipCity') }}</span>{{ ipResult.city || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipZip') }}</span>{{ ipResult.zip || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipTimezone') }}</span>{{ ipResult.timezone || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipCoords') }}</span>{{ ipResult.lat }}, {{ ipResult.lon }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipIsp') }}</span>{{ ipResult.isp || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipOrg') }}</span>{{ ipResult.org || '-' }}</n-gi>
+                        <n-gi><span class="txt-label">{{ t('toolbox.ipAs') }}</span>{{ ipResult.as || '-' }}</n-gi>
+                      </n-grid>
+                    </template>
+                  </template>
+                </template>
+
+                <template v-else>
+                  <n-input
+                    v-model:value="ipBatchText"
+                    type="textarea"
+                    :autosize="{ minRows: 4, maxRows: 10 }"
+                    :placeholder="t('toolbox.ipBatchPlaceholder')"
+                  />
+                  <n-space align="center">
+                    <n-button size="small" type="primary" :loading="ipRunning" @click="doIPLookupBatch">{{ t('toolbox.ipQuery') }}</n-button>
+                    <n-button size="small" quaternary @click="ipBatchResults = []">{{ t('toolbox.imgClear') }}</n-button>
+                    <n-tag v-if="ipBatchResults.length" size="small" :bordered="false">{{ ipBatchResults.length }}</n-tag>
+                  </n-space>
+                  <n-data-table
+                    v-if="ipBatchResults.length"
+                    :columns="ipBatchColumns"
+                    :data="ipBatchRows"
+                    :bordered="false"
+                    size="small"
+                    :max-height="360"
+                    :row-key="(row: any) => row.input"
+                  />
                 </template>
               </n-space>
             </n-card>
@@ -2532,6 +3006,29 @@ async function wmRotate(deg: number) {
 </template>
 
 <style scoped>
+.tb-subtabs :deep(.n-tabs-rail) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.tb-subtabs :deep(.n-tabs-tab-wrapper) {
+  flex-basis: auto;
+  flex-grow: 0;
+}
+.tb-subtabs :deep(.n-tabs-tab) {
+  padding: 5px 14px;
+  white-space: nowrap;
+}
+.tb-subtabs :deep(.n-tabs-capsule) {
+  display: none;
+}
+.tb-subtabs :deep(.n-tabs-tab.n-tabs-tab--active) {
+  background-color: var(--n-tab-color-segment);
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08);
+}
+.tb-subtabs :deep(.n-tabs-pane-wrapper) {
+  width: 100%;
+  flex-basis: 100%;
+}
 .tb-hint {
   font-size: 12px;
   opacity: 0.5;
@@ -2561,12 +3058,15 @@ async function wmRotate(deg: number) {
 }
 .imgcmp-row {
   display: grid;
-  grid-template-columns: 1fr 100px 160px 80px;
+  grid-template-columns: 1fr 90px 150px 96px;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
   border-radius: 6px;
   font-size: 12px;
+}
+.imgcmp-row > :last-child {
+  justify-self: end;
 }
 .imgcmp-row:not(.imgcmp-head):nth-child(odd) {
   background: rgba(255, 255, 255, 0.04);

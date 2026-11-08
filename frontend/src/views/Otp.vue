@@ -15,8 +15,13 @@ import {
   useMessage,
 } from 'naive-ui'
 import { Clipboard, Dialogs } from '@wailsio/runtime'
+import { copyWithAutoClear } from '../lib/clipboardClear'
+import { requestSavePath, publishSaved } from '../lib/saveFile'
 import { ExportService, OTPService, type OTPEntry } from '../lib/api'
-import { errText } from '../lib/i18n'
+import { t, errText } from '../lib/i18n'
+import { useRouteHighlight } from '../lib/routeHighlight'
+
+useRouteHighlight()
 
 const message = useMessage()
 
@@ -111,7 +116,7 @@ async function remove(row: Row) {
   try {
     await OTPService.Delete(row.id)
     await load()
-    message.success('已删除')
+    message.success(t('trash.movedHint'))
   } catch (e) {
     message.error(errText(e))
   }
@@ -214,18 +219,38 @@ async function copyBatchURI() {
 async function saveBatchPNG() {
   const b = currentBatch.value
   if (!b) return
-  const path = await Dialogs.SaveFile({
-    Title: '保存二维码图片',
-    Filename: `otp-migration-${b.index}-of-${b.total}.png`,
-    Filters: [{ DisplayName: 'PNG 图片', Pattern: '*.png' }],
-  })
+  const name = `otp-migration-${b.index}-of-${b.total}.png`
+  const path = await requestSavePath('保存二维码图片', name, [
+    { DisplayName: 'PNG 图片', Pattern: '*.png' },
+  ])
   if (!path) return
   try {
     const b64 = (await OTPService.ExportQRImage(b.uri)) as string
     await ExportService.SaveBinary(path, b64)
-    message.success('已保存二维码图片')
+    const where = await publishSaved(path, name)
+    message.success('已保存二维码图片' + (where ? ` → ${where}` : ''))
   } catch (e) {
     message.error(errText(e))
+  }
+}
+
+/** Export all OTP secrets as a human-readable plaintext recovery sheet. */
+async function exportRecovery() {
+  exporting.value = true
+  try {
+    const text = (await OTPService.ExportPlaintext([])) as string
+    const filename = `otp-recovery-${new Date().toISOString().slice(0, 10)}.txt`
+    const path = await requestSavePath('保存 OTP 恢复码', filename, [
+      { DisplayName: '文本文件', Pattern: '*.txt' },
+    ])
+    if (!path) return
+    await ExportService.SaveText(path, text)
+    const where = await publishSaved(path, filename)
+    message.success('恢复码已保存（含明文密钥，请妥善保管）' + (where ? ` → ${where}` : ''))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -243,8 +268,8 @@ async function copyEntryURI(row: Row) {
 async function copyCode(row: Row) {
   const c = codes.value[row.id]?.code
   if (!c) return
-  await Clipboard.SetText(c)
-  message.success('验证码已复制')
+  await copyWithAutoClear(c)
+  message.success('验证码已复制（N 秒后自动清理剪贴板）')
 }
 
 async function nextHotp(row: Row) {
@@ -304,6 +329,7 @@ onUnmounted(() => {
       <span>OTP 验证码</span>
       <n-space>
         <n-button size="small" :loading="exporting" @click="openExport">导出迁移</n-button>
+        <n-button size="small" @click="exportRecovery">导出恢复码</n-button>
         <n-button size="small" @click="importQRImage">识别二维码图片</n-button>
         <n-button size="small" @click="showImport = true">导入 URI</n-button>
         <n-button type="primary" size="small" @click="openCreate">新增</n-button>
@@ -324,7 +350,7 @@ onUnmounted(() => {
       暂无 OTP 条目，点击右上角「新增」或「导入 URI」。
     </div>
     <div v-else class="otp-grid">
-      <div v-for="r in filtered" :key="r.id" class="otp-card">
+      <div v-for="r in filtered" :key="r.id" class="otp-card" :data-hid="r.id">
         <div class="otp-card-head">
           <div class="otp-card-title">
             <span class="otp-card-name">{{ r.title || r.account }}</span>

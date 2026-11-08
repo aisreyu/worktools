@@ -10,10 +10,13 @@ import {
   NSwitch,
   useMessage,
 } from 'naive-ui'
-import { Dialogs } from '@wailsio/runtime'
 import { NoteService, ExportService, type NoteEntry } from '../lib/api'
+import { requestSavePath, publishSaved } from '../lib/saveFile'
 import { renderMarkdown, wrapHtmlDocument } from '../lib/markdown'
 import { t, errText } from '../lib/i18n'
+import { useRouteHighlight } from '../lib/routeHighlight'
+
+useRouteHighlight()
 
 const message = useMessage()
 
@@ -212,14 +215,11 @@ async function exportNote() {
     message.warning(t('notes.emptyNoExport'))
     return
   }
-  const path = await Dialogs.SaveFile({
-    Title: t('notes.exportNote'),
-    Filename: safeName() + '.md',
-    Filters: [
-      { DisplayName: t('notes.markdownFile'), Pattern: '*.md' },
-      { DisplayName: t('notes.htmlFile'), Pattern: '*.html' },
-    ],
-  })
+  const name = safeName() + '.md'
+  const path = await requestSavePath(t('notes.exportNote'), name, [
+    { DisplayName: t('notes.markdownFile'), Pattern: '*.md' },
+    { DisplayName: t('notes.htmlFile'), Pattern: '*.html' },
+  ])
   if (!path) return
   try {
     let content = editorContent.value
@@ -227,7 +227,9 @@ async function exportNote() {
       content = wrapHtmlDocument(editorTitle.value.trim() || t('notes.newNoteTitle'), previewHtml.value)
     }
     await ExportService.SaveText(path, content)
-    message.success(t('notes.exported') + path)
+    const finalName = path.replace(/\\/g, '/').split('/').pop() || name
+    const where = await publishSaved(path, finalName)
+    message.success(t('notes.exported') + (where || path))
   } catch (e) {
     message.error(t('notes.exportFailed') + errText(e))
   }
@@ -281,6 +283,7 @@ onMounted(load)
             :key="n.id"
             class="note-item"
             :class="{ active: n.id === selectedId }"
+            :data-hid="n.id"
             @click="select(n)"
           >
             <div class="note-item-title">

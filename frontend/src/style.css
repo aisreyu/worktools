@@ -1,7 +1,14 @@
-:root {
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
   --nb-bg: #121218;
   --nb-fg: #e6e6ec;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --nb-bg: #f5f6f8;
+  --nb-fg: #1f1f24;
 }
 
 * {
@@ -44,4 +51,14 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* Deep-link highlight: briefly flash a row that was jumped to via search. */
+.nb-flash {
+  animation: nb-flash 2.2s ease-out;
+  border-radius: 8px;
+}
+@keyframes nb-flash {
+  0% { background-color: rgba(64, 158, 255, 0.35); }
+  100% { background-color: transparent; }
 }

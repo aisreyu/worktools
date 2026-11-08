@@ -10,7 +10,7 @@ import (
 
 // AppDir returns the per-user directory that holds the database and settings.
 func AppDir() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := baseDir()
 	if err != nil {
 		return "", err
 	}

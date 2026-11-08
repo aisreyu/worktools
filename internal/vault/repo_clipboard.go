@@ -1,7 +1,10 @@
 package vault
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"sort"
 	"strings"
@@ -22,12 +25,15 @@ const settingClipboardAuto = "clipboard.autoCapture"
 
 // ListClipboard returns stored captures, newest first, optionally filtered by a
 // case-insensitive substring of the text and by kind ("" or "all" = any kind).
+// Image entries carry their base64 PNG payload in Data so the UI can preview
+// them inline.
 func (v *Vault) ListClipboard(query, kind string) ([]store.ClipboardItem, error) {
 	c, err := v.cryptoOrErr()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, text_ct, text_nonce, kind, pinned, created_at, updated_at
+	rows, err := v.db.Query(`SELECT id, text_ct, text_nonce, data_ct, data_nonce,
+            data_mime, data_size, kind, pinned, created_at, updated_at
         FROM clipboard_items ORDER BY pinned DESC, created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
@@ -38,14 +44,25 @@ func (v *Vault) ListClipboard(query, kind string) ([]store.ClipboardItem, error)
 	out := make([]store.ClipboardItem, 0, 64)
 	for rows.Next() {
 		var (
-			it        store.ClipboardItem
-			ct, nonce []byte
+			it                  store.ClipboardItem
+			textCt, textNonce   []byte
+			dataCt, dataNonce   []byte
+			mime                string
 		)
-		if err := rows.Scan(&it.ID, &ct, &nonce, &it.Kind, &it.Pinned, &it.CreatedAt, &it.UpdatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &textCt, &textNonce, &dataCt, &dataNonce,
+			&mime, &it.Size, &it.Kind, &it.Pinned, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err
 		}
-		if it.Text, err = c.DecryptField(ct, nonce, aadClipText); err != nil {
+		if it.Text, err = c.DecryptField(textCt, textNonce, aadClipText); err != nil {
 			return nil, err
+		}
+		if len(dataCt) > 0 {
+			raw, err := c.DecryptField(dataCt, dataNonce, aadClipData)
+			if err != nil {
+				return nil, err
+			}
+			it.Data = raw
+			it.Mime = mime
 		}
 		if kind != "" && kind != "all" && it.Kind != kind {
 			continue
@@ -53,7 +70,7 @@ func (v *Vault) ListClipboard(query, kind string) ([]store.ClipboardItem, error)
 		if query != "" && !strings.Contains(strings.ToLower(it.Text), query) {
 			continue
 		}
-		it.Preview = clipboard.Preview(it.Text)
+		it.Preview = clipboard.PreviewFor(it.Kind, it.Text)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -90,51 +107,99 @@ func (v *Vault) Kinds() ([]string, error) {
 	return out, nil
 }
 
-// SaveClipboard stores a new capture. It normalises the text, skips empty and
-// duplicate-of-newest captures (returning a zero item in that case) and evicts
-// the oldest unpinned entries beyond ClipboardMax.
+// SaveClipboard stores a new text capture. It normalises the text, skips empty
+// and duplicate-of-newest captures (returning a zero item in that case) and
+// evicts the oldest unpinned entries beyond ClipboardMax.
 func (v *Vault) SaveClipboard(text string) (store.ClipboardItem, error) {
+	return v.SaveClipboardCapture(clipboard.TextCapture(text))
+}
+
+// SaveClipboardCapture stores a captured clipboard reading. Text and file kinds
+// persist their text; images persist a base64 PNG payload. Empty captures and
+// copies identical to the newest entry are skipped, returning a zero item.
+func (v *Vault) SaveClipboardCapture(cap clipboard.Capture) (store.ClipboardItem, error) {
 	c, err := v.cryptoOrErr()
 	if err != nil {
 		return store.ClipboardItem{}, err
 	}
-	text = clipboard.Normalize(text)
-	if strings.TrimSpace(text) == "" {
+	if cap.Kind == "" {
+		cap.Kind = clipboard.KindText
+	}
+	cap.Text = clipboard.Normalize(cap.Text)
+	if cap.Kind != clipboard.KindImage && strings.TrimSpace(cap.Text) == "" {
 		return store.ClipboardItem{}, nil
 	}
+	if cap.Kind == clipboard.KindImage && len(cap.Data) == 0 {
+		return store.ClipboardItem{}, nil
+	}
+
+	sum := sha256.Sum256(cap.Data)
+	dataSHA := ""
+	if len(cap.Data) > 0 {
+		dataSHA = hex.EncodeToString(sum[:])
+	}
+
 	// Dedupe against the most recent entry regardless of pin state.
 	var (
-		lastID   int64
-		lastCt   []byte
-		lastNonc []byte
-		hasLast  bool
+		lastID       int64
+		lastTextCt   []byte
+		lastTextNonc []byte
+		lastDataSHA  string
+		hasLast      bool
 	)
-	row := v.db.QueryRow(`SELECT id, text_ct, text_nonce FROM clipboard_items
+	row := v.db.QueryRow(`SELECT id, text_ct, text_nonce, data_sha FROM clipboard_items
         ORDER BY created_at DESC, id DESC LIMIT 1`)
-	if err := row.Scan(&lastID, &lastCt, &lastNonc); err == nil {
+	if err := row.Scan(&lastID, &lastTextCt, &lastTextNonc, &lastDataSHA); err == nil {
 		hasLast = true
 	} else if err != sql.ErrNoRows {
 		return store.ClipboardItem{}, err
 	}
 	if hasLast {
-		lastText, err := c.DecryptField(lastCt, lastNonc, aadClipText)
-		if err != nil {
-			return store.ClipboardItem{}, err
-		}
-		if lastText == text {
-			return store.ClipboardItem{}, nil
+		if dataSHA != "" {
+			if lastDataSHA == dataSHA {
+				return store.ClipboardItem{}, nil
+			}
+		} else {
+			lastText, err := c.DecryptField(lastTextCt, lastTextNonc, aadClipText)
+			if err != nil {
+				return store.ClipboardItem{}, err
+			}
+			if lastText == cap.Text {
+				return store.ClipboardItem{}, nil
+			}
 		}
 	}
 
-	ct, nonce, err := c.EncryptField(text, aadClipText)
+	textCT, textNonce, err := c.EncryptField(cap.Text, aadClipText)
 	if err != nil {
 		return store.ClipboardItem{}, err
 	}
+	var (
+		dataCT    []byte
+		dataNonce []byte
+		mime      string
+		size      int64
+	)
+	if len(cap.Data) > 0 {
+		enc, nonce, err := c.EncryptField(base64.StdEncoding.EncodeToString(cap.Data), aadClipData)
+		if err != nil {
+			return store.ClipboardItem{}, err
+		}
+		dataCT, dataNonce = enc, nonce
+		mime = cap.Mime
+		if mime == "" {
+			mime = "image/png"
+		}
+		size = int64(len(cap.Data))
+	}
+
 	now := time.Now().Unix()
-	kind := clipboard.DetectKind(text)
+	kind := cap.Kind
 	res, err := v.db.Exec(`INSERT INTO clipboard_items
-        (text_ct, text_nonce, kind, pinned, created_at, updated_at)
-        VALUES (?, ?, ?, 0, ?, ?)`, ct, nonce, kind, now, now)
+        (text_ct, text_nonce, data_ct, data_nonce, data_mime, data_sha, data_size,
+         kind, pinned, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		textCT, textNonce, dataCT, dataNonce, mime, dataSHA, size, kind, now, now)
 	if err != nil {
 		return store.ClipboardItem{}, err
 	}
@@ -142,8 +207,13 @@ func (v *Vault) SaveClipboard(text string) (store.ClipboardItem, error) {
 	if err := v.trimClipboard(); err != nil {
 		return store.ClipboardItem{}, err
 	}
-	return store.ClipboardItem{ID: id, Text: text, Preview: clipboard.Preview(text),
-		Kind: kind, CreatedAt: now, UpdatedAt: now}, nil
+	item := store.ClipboardItem{ID: id, Text: cap.Text, Kind: kind,
+		Preview: clipboard.PreviewFor(kind, cap.Text), Mime: mime, Size: size,
+		CreatedAt: now, UpdatedAt: now}
+	if len(cap.Data) > 0 {
+		item.Data = base64.StdEncoding.EncodeToString(cap.Data)
+	}
+	return item, nil
 }
 
 // trimClipboard drops the oldest unpinned entries beyond the cap.
@@ -155,7 +225,7 @@ func (v *Vault) trimClipboard() error {
 }
 
 // UpdateClipboardText replaces the text of an existing capture, re-detecting
-// its kind.
+// its kind. Any image payload is dropped because the entry is now text.
 func (v *Vault) UpdateClipboardText(id int64, text string) error {
 	c, err := v.cryptoOrErr()
 	if err != nil {
@@ -169,8 +239,41 @@ func (v *Vault) UpdateClipboardText(id int64, text string) error {
 	if err != nil {
 		return err
 	}
-	_, err = v.db.Exec(`UPDATE clipboard_items SET text_ct=?, text_nonce=?, kind=?, updated_at=? WHERE id=?`,
+	_, err = v.db.Exec(`UPDATE clipboard_items
+        SET text_ct=?, text_nonce=?, kind=?, data_ct=NULL, data_nonce=NULL,
+            data_mime='', data_sha='', data_size=0, updated_at=? WHERE id=?`,
 		ct, nonce, clipboard.DetectKind(text), time.Now().Unix(), id)
+	return err
+}
+
+// ClipboardData returns the base64-encoded payload (a PNG for images) of a
+// capture, or "" when the entry has no binary data.
+func (v *Vault) ClipboardData(id int64) (string, error) {
+	c, err := v.cryptoOrErr()
+	if err != nil {
+		return "", err
+	}
+	var ct, nonce []byte
+	err = v.db.QueryRow(`SELECT data_ct, data_nonce FROM clipboard_items WHERE id=?`, id).
+		Scan(&ct, &nonce)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return c.DecryptField(ct, nonce, aadClipData)
+}
+
+// ClearClipboardData erases the stored binary payload for a capture while
+// keeping its metadata, mirroring how secret fields are wiped after copy.
+func (v *Vault) ClearClipboardData(id int64) error {
+	if _, err := v.cryptoOrErr(); err != nil {
+		return err
+	}
+	_, err := v.db.Exec(`UPDATE clipboard_items
+        SET data_ct=NULL, data_nonce=NULL, data_mime='', data_sha='', data_size=0,
+            updated_at=? WHERE id=?`, time.Now().Unix(), id)
 	return err
 }
 

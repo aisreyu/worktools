@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/aisreyu/worktools/internal/config"
 	"github.com/aisreyu/worktools/internal/store"
@@ -27,6 +28,7 @@ var trayIcon []byte
 const lockEventName = "nb:lock"
 
 func main() {
+	preparePlatform()
 	dbPath, err := config.DBPath()
 	if err != nil {
 		log.Fatalf("resolve data path: %v", err)
@@ -39,6 +41,12 @@ func main() {
 
 	v := vault.New(db)
 
+	// OS notification service for schedule reminders.
+	notifier := notifications.New()
+
+	// Backup service also drives the rolling auto-backup scheduler.
+	backupSvc := services.NewBackupService(v)
+
 	app := application.New(application.Options{
 		Name:        "worktools",
 		Description: "Ops desktop workbench",
@@ -49,12 +57,14 @@ func main() {
 			application.NewService(services.NewToolboxService(v)),
 			application.NewService(services.NewNoteService(v)),
 			application.NewService(services.NewFileService(v)),
-			application.NewService(services.NewBackupService(v)),
+			application.NewService(backupSvc),
 			application.NewService(services.NewOpenURLService(v)),
 			application.NewService(services.NewExportService()),
-			application.NewService(services.NewScheduleService(v)),
+			application.NewService(notifier),
+			application.NewService(services.NewScheduleService(v, notifier)),
 			application.NewService(services.NewWorkbenchService(v)),
 			application.NewService(services.NewClipboardService(v)),
+			application.NewService(services.NewTrashService(v)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -77,10 +87,18 @@ func main() {
 		URL:              "/",
 	})
 
-	installTray(app, v)
-	installShortcuts(app, v)
+	if !application.System.IsMobile() {
+		installTray(app, v)
+		installShortcuts(app, v)
+		// Ask for notification permission up front so reminders can be shown.
+		_, _ = notifier.RequestNotificationAuthorization()
+	}
 
 	_ = win
+
+	// Start the rolling auto-backup scheduler; it no-ops until the vault is
+	// unlocked and auto-backup is enabled in settings.
+	backupSvc.StartAutoBackup()
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)

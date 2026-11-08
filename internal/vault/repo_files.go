@@ -40,8 +40,8 @@ func (v *Vault) ListFiles() ([]store.FileEntry, error) {
 	if _, err := v.cryptoOrErr(); err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, title, category, note, mime, size, created_at, updated_at
-        FROM file_entries ORDER BY updated_at DESC`)
+	rows, err := v.db.Query(`SELECT id, title, category, note, mime, size, created_at, updated_at, deleted_at
+        FROM file_entries WHERE deleted_at = 0 ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (v *Vault) ListFiles() ([]store.FileEntry, error) {
 	var out []store.FileEntry
 	for rows.Next() {
 		var e store.FileEntry
-		if err := rows.Scan(&e.ID, &e.Title, &e.Category, &e.Note, &e.Mime, &e.Size, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &e.Category, &e.Note, &e.Mime, &e.Size, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -144,20 +144,11 @@ func (v *Vault) SaveFile(e store.FileEntry) (int64, error) {
 	return e.ID, nil
 }
 
-// DeleteFile removes a file entry and any on-disk blob it owns.
+// DeleteFile moves a file entry to the trash (soft delete). The on-disk blob
+// is intentionally kept so the entry can be restored; PurgeFiles removes it.
 func (v *Vault) DeleteFile(id int64) error {
-	var mode, path string
-	if err := v.db.QueryRow(`SELECT stored, disk_path FROM file_entries WHERE id = ?`, id).
-		Scan(&mode, &path); err != nil {
-		return err
-	}
-	if _, err := v.db.Exec(`DELETE FROM file_entries WHERE id = ?`, id); err != nil {
-		return err
-	}
-	if mode == "disk" {
-		removeIfSet(path)
-	}
-	return nil
+	_, err := v.db.Exec(`UPDATE file_entries SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
 }
 
 // listFileRows returns every file entry with its body decrypted, for backup.

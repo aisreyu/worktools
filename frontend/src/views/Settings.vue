@@ -3,19 +3,24 @@ import { computed, onMounted, ref } from 'vue'
 import {
   NButton,
   NCard,
+  NDivider,
   NEmpty,
   NForm,
   NFormItem,
   NInput,
+  NInputNumber,
+  NModal,
   NRadioButton,
   NRadioGroup,
   NSelect,
   NSpace,
+  NSwitch,
   NTable,
   NTag,
   useMessage,
 } from 'naive-ui'
 import { Dialogs } from '@wailsio/runtime'
+import { requestSavePath, publishSaved, savedLocationSuffix } from '../lib/saveFile'
 import {
   AppService,
   BackupService,
@@ -26,13 +31,44 @@ import {
   type RecoveryQuestion,
   type PasswordAuditReport,
   type PasswordAuditFinding,
+  type AutoBackupStatus,
+  type BackupFile,
   type ImportedCredential,
   type ImportedCredentials,
 } from '../lib/api'
 import { refreshStatus } from '../lib/vaultState'
 import { locale, setLocale, t, errText, detailText } from '../lib/i18n'
+import { themeMode, accentColor, accentPresets, setThemeMode, setAccentColor, type ThemeMode } from '../lib/theme'
+import { autoLockMinutes, setAutoLockMinutes } from '../lib/autoLock'
+import { clipClearSeconds, setClipClearSeconds } from '../lib/clipboardClear'
 
 const message = useMessage()
+
+// ---- Auto-lock ----
+const autoLockOptions = computed(() => [
+  { label: t('settings.autoLockOff'), value: 0 },
+  { label: t('settings.autoLock5'), value: 5 },
+  { label: t('settings.autoLock15'), value: 15 },
+  { label: t('settings.autoLock30'), value: 30 },
+  { label: t('settings.autoLock60'), value: 60 },
+])
+
+function onAutoLockChange(v: number) {
+  setAutoLockMinutes(v)
+}
+
+// ---- Clipboard auto-clear ----
+const clipClearOptions = computed(() => [
+  { label: t('settings.clipClearOff'), value: 0 },
+  { label: t('settings.clipClear10'), value: 10 },
+  { label: t('settings.clipClear30'), value: 30 },
+  { label: t('settings.clipClear60'), value: 60 },
+  { label: t('settings.clipClear120'), value: 120 },
+])
+
+function onClipClearChange(v: number) {
+  setClipClearSeconds(v)
+}
 
 // ---- Language ----
 const langOptions = [
@@ -42,6 +78,22 @@ const langOptions = [
 
 function onLangChange(v: string) {
   setLocale(v as 'zh' | 'en')
+}
+
+// ---- Theme ----
+const themeOptions = computed(() => [
+  { label: t('settings.themeSystem'), value: 'system' },
+  { label: t('settings.themeLight'), value: 'light' },
+  { label: t('settings.themeDark'), value: 'dark' },
+])
+
+function onThemeChange(v: string) {
+  setThemeMode(v as ThemeMode)
+}
+
+function onAccentInput(e: Event) {
+  const v = (e.target as HTMLInputElement).value
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) setAccentColor(v)
 }
 
 // ---- About ----
@@ -138,16 +190,16 @@ async function exportBackup() {
     message.warning(locale.value === 'en' ? 'Set the backup file password first' : '请先设置备份文件密码')
     return
   }
-  const path = await Dialogs.SaveFile({
-    Title: t('settings.backupNow'),
-    Filename: `worktools-backup-${new Date().toISOString().slice(0, 10)}.json`,
-    Filters: [{ DisplayName: 'JSON', Pattern: '*.json' }],
-  })
+  const filename = `worktools-backup-${new Date().toISOString().slice(0, 10)}.json`
+  const path = await requestSavePath(t('settings.backupNow'), filename, [
+    { DisplayName: 'JSON', Pattern: '*.json' },
+  ])
   if (!path) return
   exporting.value = true
   try {
     await BackupService.Export(path, backupPwd.value)
-    message.success(`${t('settings.backupDone')}: ${path}`)
+    const where = await publishSaved(path, filename)
+    message.success(`${t('settings.backupDone')}: ${where || path}`)
   } catch (e) {
     message.error(errText(e))
   } finally {
@@ -182,12 +234,157 @@ async function importBackup() {
   }
 }
 
+// ---- Auto backup ----
+const autoBackup = ref<AutoBackupStatus | null>(null)
+const autoDir = ref('')
+const autoInterval = ref(24)
+const autoKeep = ref(7)
+const autoEnabled = ref(false)
+const autoPwd = ref('')
+const autoSaving = ref(false)
+const autoRunning = ref(false)
+
+const intervalOptions = computed(() => [
+  { label: locale.value === 'en' ? 'Every 6 hours' : '每 6 小时', value: 6 },
+  { label: locale.value === 'en' ? 'Every 12 hours' : '每 12 小时', value: 12 },
+  { label: locale.value === 'en' ? 'Daily' : '每天', value: 24 },
+  { label: locale.value === 'en' ? 'Weekly' : '每周', value: 168 },
+])
+
+function applyAutoStatus(s: AutoBackupStatus) {
+  autoBackup.value = s
+  autoDir.value = s.dir
+  autoInterval.value = s.intervalHours
+  autoKeep.value = s.keep
+  autoEnabled.value = s.enabled
+}
+
+async function loadAutoBackup() {
+  try {
+    applyAutoStatus((await BackupService.AutoBackupStatus()) as AutoBackupStatus)
+  } catch (e) {
+    // Silent: vault may be locked during initial mount.
+  }
+}
+
+async function pickBackupDir() {
+  const dir = await Dialogs.OpenFile({
+    Title: t('autoBackup.pickDir'),
+    CanChooseDirectories: true,
+    CanChooseFiles: false,
+    CanCreateDirectories: true,
+  })
+  if (!dir || Array.isArray(dir)) return
+  autoDir.value = dir
+}
+
+async function saveAutoBackupSettings() {
+  autoSaving.value = true
+  try {
+    await BackupService.SaveAutoBackupSettings(autoEnabled.value, autoDir.value, autoInterval.value, autoKeep.value)
+    if (autoPwd.value) {
+      await BackupService.SetAutoBackupPassword(autoPwd.value)
+      autoPwd.value = ''
+    }
+    await loadAutoBackup()
+    message.success(t('autoBackup.saved'))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    autoSaving.value = false
+  }
+}
+
+async function runAutoBackupNow() {
+  autoRunning.value = true
+  try {
+    const path = await BackupService.RunAutoBackupNow()
+    message.success(`${t('autoBackup.ranNow')}: ${path}`)
+    await loadAutoBackup()
+    await loadBackupFiles()
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    autoRunning.value = false
+  }
+}
+
+// ---- Backup restore history ----
+const backupFiles = ref<BackupFile[]>([])
+const backupFilesLoading = ref(false)
+const restorePwd = ref('')
+const restoringPath = ref('')
+const showRestoreModal = ref(false)
+const restoreTarget = ref<BackupFile | null>(null)
+
+async function loadBackupFiles() {
+  backupFilesLoading.value = true
+  try {
+    backupFiles.value = ((await BackupService.ListBackups()) ?? []) as BackupFile[]
+  } catch {
+    // ignore: may be locked or no dir configured
+  } finally {
+    backupFilesLoading.value = false
+  }
+}
+
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+function openRestore(f: BackupFile) {
+  restoreTarget.value = f
+  restorePwd.value = ''
+  showRestoreModal.value = true
+}
+
+async function confirmRestore() {
+  const f = restoreTarget.value
+  if (!f) return
+  if (!restorePwd.value) {
+    message.warning(t('autoBackup.passwordNeeded'))
+    return
+  }
+  restoringPath.value = f.path
+  try {
+    const n = await BackupService.RestoreBackupFile(f.path, restorePwd.value)
+    message.success(t('autoBackup.restoreDone', { n }))
+    showRestoreModal.value = false
+    await refreshStatus()
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    restoringPath.value = ''
+  }
+}
+
+function fmtTs(ts: number): string {
+  if (!ts) return '—'
+  const d = new Date(ts * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 // ---- Password health audit ----
 const auditReport = ref<PasswordAuditReport | null>(null)
 const auditing = ref(false)
+type AuditFilter = 'all' | 'weak' | 'reused' | 'old'
+const auditFilter = ref<AuditFilter>('all')
+const filteredFindings = computed<PasswordAuditFinding[]>(() => {
+  const list = auditReport.value?.findings ?? []
+  if (auditFilter.value === 'all') return list
+  return list.filter((f) => f.issue === auditFilter.value)
+})
+
+function setAuditFilter(f: AuditFilter) {
+  auditFilter.value = auditFilter.value === f ? 'all' : f
+}
 
 async function runAudit() {
   auditing.value = true
+  auditFilter.value = 'all'
   try {
     auditReport.value = (await WorkbenchService.PasswordAudit()) as PasswordAuditReport
   } catch (e) {
@@ -278,6 +475,8 @@ async function confirmImport() {
 onMounted(async () => {
   await refreshStatus()
   await loadRecovery()
+  await loadAutoBackup()
+  await loadBackupFiles()
   try {
     info.value = await AppService.Info()
   } catch {
@@ -298,6 +497,57 @@ onMounted(async () => {
             <n-radio-button v-for="o in langOptions" :key="o.value" :value="o.value" :label="o.label" />
           </n-radio-group>
           <span class="hint">{{ t('settings.languageDesc') }}</span>
+        </div>
+      </n-card>
+
+      <!-- Theme -->
+      <n-card :title="t('settings.theme')" size="small">
+        <div class="lang-row" style="margin-bottom: 12px">
+          <n-radio-group :value="themeMode" @update:value="onThemeChange">
+            <n-radio-button v-for="o in themeOptions" :key="o.value" :value="o.value" :label="o.label" />
+          </n-radio-group>
+          <span class="hint">{{ t('settings.themeDesc') }}</span>
+        </div>
+        <div class="lang-row">
+          <span class="hint">{{ t('settings.accent') }}</span>
+          <div class="accent-swatches">
+            <span
+              v-for="c in accentPresets"
+              :key="c"
+              class="accent-swatch"
+              :class="{ active: accentColor.toLowerCase() === c }"
+              :style="{ background: c }"
+              :title="c"
+              @click="setAccentColor(c)"
+            />
+            <input class="accent-picker" type="color" :value="accentColor" @input="onAccentInput" />
+          </div>
+        </div>
+      </n-card>
+
+      <!-- Auto-lock -->
+      <n-card :title="t('settings.autoLock')" size="small">
+        <div class="lang-row">
+          <n-select
+            :value="autoLockMinutes"
+            :options="autoLockOptions"
+            style="width: 200px"
+            @update:value="onAutoLockChange"
+          />
+          <span class="hint">{{ t('settings.autoLockDesc') }}</span>
+        </div>
+      </n-card>
+
+      <!-- Clipboard auto-clear -->
+      <n-card :title="t('settings.clipClear')" size="small">
+        <div class="lang-row">
+          <n-select
+            :value="clipClearSeconds"
+            :options="clipClearOptions"
+            style="width: 200px"
+            @update:value="onClipClearChange"
+          />
+          <span class="hint">{{ t('settings.clipClearDesc') }}</span>
         </div>
       </n-card>
 
@@ -398,11 +648,36 @@ onMounted(async () => {
         <template v-else>
           <div class="audit-stats">
             <n-tag size="small" round :bordered="false">{{ t('audit.total', { n: auditReport.total }) }}</n-tag>
-            <n-tag size="small" round type="error">{{ t('audit.weak') }} {{ auditReport.weak }}</n-tag>
-            <n-tag size="small" round type="warning">{{ t('audit.reused') }} {{ auditReport.reused }}</n-tag>
-            <n-tag size="small" round type="default">{{ t('audit.old') }} {{ auditReport.old }}</n-tag>
+            <n-tag
+              size="small"
+              round
+              type="error"
+              style="cursor: pointer"
+              :class="{ 'audit-tag-active': auditFilter === 'weak' }"
+              @click="setAuditFilter('weak')"
+            >{{ t('audit.weak') }} {{ auditReport.weak }}</n-tag>
+            <n-tag
+              size="small"
+              round
+              type="warning"
+              style="cursor: pointer"
+              :class="{ 'audit-tag-active': auditFilter === 'reused' }"
+              @click="setAuditFilter('reused')"
+            >{{ t('audit.reused') }} {{ auditReport.reused }}</n-tag>
+            <n-tag
+              size="small"
+              round
+              type="default"
+              style="cursor: pointer"
+              :class="{ 'audit-tag-active': auditFilter === 'old' }"
+              @click="setAuditFilter('old')"
+            >{{ t('audit.old') }} {{ auditReport.old }}</n-tag>
           </div>
-          <n-empty v-if="(auditReport.findings ?? []).length === 0" :description="t('audit.clean')" style="padding: 20px 0" />
+          <div v-if="auditFilter !== 'all'" class="hint" style="margin-top: 6px">
+            {{ t('audit.filtering') }}
+            <a style="cursor: pointer; text-decoration: underline" @click="auditFilter = 'all'">{{ t('audit.clearFilter') }}</a>
+          </div>
+          <n-empty v-if="filteredFindings.length === 0" :description="t('audit.clean')" style="padding: 20px 0" />
           <n-table v-else size="small" :bordered="false" :single-line="false" style="margin-top: 12px">
             <thead>
               <tr>
@@ -414,7 +689,7 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(f, i) in auditReport.findings ?? []" :key="i">
+              <tr v-for="(f, i) in filteredFindings" :key="i">
                 <td>{{ f.title || f.username || '—' }}</td>
                 <td>{{ findingSource(f) }}</td>
                 <td>{{ issueLabel(f.issue) }}</td>
@@ -497,8 +772,93 @@ onMounted(async () => {
             : '备份文件使用 Argon2id + AES-256-GCM 独立加密，包含 URL、密码、OTP 和记事本全部数据。还原为合并模式：现有数据保留，备份中的记录追加导入。' }}
         </div>
       </n-card>
+
+      <!-- Auto backup -->
+      <n-card :title="t('autoBackup.title')" size="small">
+        <div class="hint" style="margin-bottom: 10px">{{ t('autoBackup.desc') }}</div>
+        <n-form label-placement="left" label-width="96">
+          <n-form-item :label="t('autoBackup.enable')">
+            <n-switch v-model:value="autoEnabled" />
+            <span v-if="autoBackup" style="margin-left: 12px; font-size: 12px; opacity: 0.55">
+              {{ t('autoBackup.lastRun') }}: {{ fmtTs(autoBackup.lastAt) }}
+              <template v-if="autoBackup.nextAt"> · {{ t('autoBackup.nextRun') }}: {{ fmtTs(autoBackup.nextAt) }}</template>
+              · {{ t('autoBackup.fileCount', { n: autoBackup.count }) }}
+            </span>
+          </n-form-item>
+          <n-form-item :label="t('autoBackup.dir')">
+            <n-input v-model:value="autoDir" readonly :placeholder="t('autoBackup.dirPlaceholder')" style="flex: 1" />
+            <n-button style="margin-left: 8px" @click="pickBackupDir">{{ t('autoBackup.pickDir') }}</n-button>
+          </n-form-item>
+          <n-form-item :label="t('autoBackup.interval')">
+            <n-select v-model:value="autoInterval" :options="intervalOptions" style="width: 160px" />
+            <span class="hint" style="margin-left: 16px">{{ t('autoBackup.keep') }}</span>
+            <n-input-number v-model:value="autoKeep" :min="1" :max="100" size="small" style="width: 90px; margin-left: 8px" />
+          </n-form-item>
+          <n-form-item :label="t('autoBackup.password')">
+            <n-input
+              v-model:value="autoPwd"
+              type="password"
+              show-password-on="click"
+              :placeholder="autoBackup?.hasPassword ? t('autoBackup.passwordKeep') : t('autoBackup.passwordSet')"
+              style="max-width: 360px"
+            />
+          </n-form-item>
+        </n-form>
+        <n-space>
+          <n-button type="primary" :loading="autoSaving" @click="saveAutoBackupSettings">{{ t('autoBackup.save') }}</n-button>
+          <n-button :loading="autoRunning" @click="runAutoBackupNow">{{ t('autoBackup.runNow') }}</n-button>
+        </n-space>
+        <div style="margin-top: 10px; font-size: 12px; opacity: 0.55">{{ t('autoBackup.securityHint') }}</div>
+
+        <!-- Restore history: pick any previous auto-backup and merge it back -->
+        <n-divider style="margin: 16px 0 12px">{{ t('autoBackup.history') }}</n-divider>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+          <span class="hint">{{ t('autoBackup.historyHint') }}</span>
+          <n-button size="tiny" quaternary :loading="backupFilesLoading" @click="loadBackupFiles">🔄</n-button>
+        </div>
+        <n-empty v-if="backupFiles.length === 0" :description="t('autoBackup.historyEmpty')" size="small" />
+        <n-table v-else :bordered="false" size="small">
+          <thead>
+            <tr>
+              <th>{{ t('autoBackup.colFile') }}</th>
+              <th>{{ t('autoBackup.colTime') }}</th>
+              <th>{{ t('autoBackup.colSize') }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="f in backupFiles" :key="f.path">
+              <td style="max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" :title="f.name">{{ f.name }}</td>
+              <td>{{ fmtTs(f.modTime) }}</td>
+              <td>{{ fmtSize(f.size) }}</td>
+              <td style="text-align: right">
+                <n-button size="tiny" @click="openRestore(f)">{{ t('autoBackup.restoreBtn') }}</n-button>
+              </td>
+            </tr>
+          </tbody>
+        </n-table>
+      </n-card>
     </n-space>
   </div>
+
+  <n-modal v-model:show="showRestoreModal" preset="card" :title="t('autoBackup.restoreTitle')" style="width: 460px">
+    <div v-if="restoreTarget" class="hint" style="margin-bottom: 12px">
+      {{ restoreTarget.name }} · {{ fmtTs(restoreTarget.modTime) }}
+    </div>
+    <n-input
+      v-model:value="restorePwd"
+      type="password"
+      show-password-on="click"
+      :placeholder="t('autoBackup.passwordNeeded')"
+    />
+    <div class="hint" style="margin-top: 10px">{{ t('autoBackup.restoreWarn') }}</div>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <n-button @click="showRestoreModal = false">{{ t('autoBackup.cancel') }}</n-button>
+        <n-button type="primary" :loading="!!restoringPath" @click="confirmRestore">{{ t('autoBackup.restoreBtn') }}</n-button>
+      </div>
+    </template>
+  </n-modal>
 </template>
 
 <style scoped>
@@ -521,6 +881,10 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+.audit-tag-active {
+  outline: 2px solid rgba(99, 226, 183, 0.7);
+  outline-offset: 1px;
 }
 .audit-detail {
   max-width: 320px;
@@ -561,5 +925,29 @@ onMounted(async () => {
 }
 .about-item .v {
   font-size: 13px;
+}
+.accent-swatches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.accent-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+}
+.accent-swatch.active {
+  border-color: var(--nb-fg);
+}
+.accent-picker {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
 }
 </style>

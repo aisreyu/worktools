@@ -110,26 +110,9 @@ func buildFillScript(p fillPayload) string {
 `, string(payload))
 }
 
-// OpenWithLogin opens the URL entry's site in an embedded window and fills the
-// stored credentials into its login form.
-func (s *OpenURLService) OpenWithLogin(id int64) error {
-	if s.v.Locked() {
-		return vault.ErrLocked
-	}
-	entries, err := s.v.ListURLs()
-	if err != nil {
-		return err
-	}
-	var entry *store.URLEntry
-	for i := range entries {
-		if entries[i].ID == id {
-			entry = &entries[i]
-			break
-		}
-	}
-	if entry == nil {
-		return fmt.Errorf("url entry %d not found", id)
-	}
+// openEntry opens one URL entry in an embedded window (or re-navigates an
+// existing one) and injects the login-fill script.
+func openEntry(entry *store.URLEntry) error {
 	target := strings.TrimSpace(entry.URL)
 	if target == "" {
 		return fmt.Errorf("entry has no url")
@@ -170,4 +153,55 @@ func (s *OpenURLService) OpenWithLogin(id int64) error {
 		BackgroundColour: application.NewRGB(18, 18, 24),
 	})
 	return nil
+}
+
+// OpenWithLogin opens the URL entry's site in an embedded window and fills the
+// stored credentials into its login form.
+func (s *OpenURLService) OpenWithLogin(id int64) error {
+	if s.v.Locked() {
+		return vault.ErrLocked
+	}
+	entries, err := s.v.ListURLs()
+	if err != nil {
+		return err
+	}
+	var entry *store.URLEntry
+	for i := range entries {
+		if entries[i].ID == id {
+			entry = &entries[i]
+			break
+		}
+	}
+	if entry == nil {
+		return fmt.Errorf("url entry %d not found", id)
+	}
+	return openEntry(entry)
+}
+
+// OpenEnvBatch opens every URL entry in the given environment (empty string =
+// entries with no env) and returns how many windows were opened. Each window is
+// opened independently; a bad URL on one entry does not abort the rest.
+func (s *OpenURLService) OpenEnvBatch(env string) (int, error) {
+	if s.v.Locked() {
+		return 0, vault.ErrLocked
+	}
+	entries, err := s.v.ListURLs()
+	if err != nil {
+		return 0, err
+	}
+	opened := 0
+	var firstErr error
+	for i := range entries {
+		if entries[i].Env != env {
+			continue
+		}
+		if err := openEntry(&entries[i]); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		opened++
+	}
+	return opened, firstErr
 }

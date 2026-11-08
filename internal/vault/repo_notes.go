@@ -14,8 +14,8 @@ func (v *Vault) ListNotes() ([]store.NoteEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := v.db.Query(`SELECT id, title, content_ct, content_nonce, pinned, sensitive, attach_ct, attach_nonce, attach_name, attach_mime, created_at, updated_at
-        FROM note_entries ORDER BY pinned DESC, updated_at DESC`)
+	rows, err := v.db.Query(`SELECT id, title, content_ct, content_nonce, pinned, sensitive, attach_ct, attach_nonce, attach_name, attach_mime, created_at, updated_at, deleted_at
+        FROM note_entries WHERE deleted_at = 0 ORDER BY pinned DESC, updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (v *Vault) ListNotes() ([]store.NoteEntry, error) {
 			pinned      int
 			sensitive   int
 		)
-		if err := rows.Scan(&e.ID, &e.Title, &ct, &non, &pinned, &sensitive, &attCT, &attN, &e.AttachmentName, &e.AttachmentMime, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &ct, &non, &pinned, &sensitive, &attCT, &attN, &e.AttachmentName, &e.AttachmentMime, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
 			return nil, err
 		}
 		if e.Content, err = c.DecryptField(ct, non, aadNote); err != nil {
@@ -120,9 +120,9 @@ func (v *Vault) SaveNote(e store.NoteEntry) (int64, error) {
 	return e.ID, err
 }
 
-// DeleteNote removes a note.
+// DeleteNote moves a note to the trash (soft delete).
 func (v *Vault) DeleteNote(id int64) error {
-	_, err := v.db.Exec(`DELETE FROM note_entries WHERE id = ?`, id)
+	_, err := v.db.Exec(`UPDATE note_entries SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id)
 	return err
 }
 

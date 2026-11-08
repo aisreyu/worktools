@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   NButton, NCard, NEmpty, NInput, NList, NListItem, NModal, NSelect,
   NSwitch, NTag, NTimePicker, NCheckbox, useMessage,
@@ -7,6 +7,9 @@ import {
 import { ScheduleService } from '../lib/api'
 import type { ScheduleEntry } from '../../bindings/github.com/aisreyu/worktools/internal/store/models'
 import { t } from '../lib/i18n'
+import { useRouteHighlight } from '../lib/routeHighlight'
+
+useRouteHighlight()
 
 const message = useMessage()
 const entries = ref<ScheduleEntry[]>([])
@@ -19,7 +22,15 @@ const form = ref({
   detail: '',
   dueAt: Math.floor(Date.now() / 1000) + 3600,
   remind: 0,
+  recur: '',
 })
+
+const recurOptions = computed(() => [
+  { label: t('schedule.recurNone'), value: '' },
+  { label: t('schedule.recurDaily'), value: 'daily' },
+  { label: t('schedule.recurWeekly'), value: 'weekly' },
+  { label: t('schedule.recurMonthly'), value: 'monthly' },
+])
 
 const remindOptions = computed(() => [
   { label: t('schedule.remindOff'), value: 0 },
@@ -42,13 +53,14 @@ function openNew() {
     detail: '',
     dueAt: Math.floor(Date.now() / 1000) + 3600,
     remind: 0,
+    recur: '',
   }
   showModal.value = true
 }
 
 function openEdit(e: ScheduleEntry) {
   editing.value = e
-  form.value = { title: e.title, detail: e.detail, dueAt: e.dueAt, remind: e.remind }
+  form.value = { title: e.title, detail: e.detail, dueAt: e.dueAt, remind: e.remind, recur: e.recur ?? '' }
   showModal.value = true
 }
 
@@ -90,28 +102,11 @@ function isOverdue(e: ScheduleEntry): boolean {
   return !e.done && e.dueAt * 1000 < Date.now()
 }
 
-// Reminder polling: check every 30s for entries whose remind window opened.
-let timer: ReturnType<typeof setInterval> | null = null
-
-async function pollReminders() {
-  try {
-    const due = (await ScheduleService.DueForNotify()) ?? []
-    for (const e of due) {
-      message.info(t('schedule.remindMsg', { title: e.title }), { duration: 8000 })
-    }
-  } catch {
-    /* vault may be locked */
-  }
-}
+// Reminder polling is handled globally in lib/scheduleReminders.ts (App.vue),
+// so reminders fire regardless of the active view. This view only loads data.
 
 onMounted(() => {
   load()
-  pollReminders()
-  timer = setInterval(pollReminders, 30_000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
 })
 </script>
 
@@ -126,13 +121,14 @@ onUnmounted(() => {
     <n-empty v-if="sorted.length === 0" :description="t('schedule.empty')" style="margin-top: 60px" />
 
     <n-list v-else bordered>
-      <n-list-item v-for="e in sorted" :key="e.id">
+      <n-list-item v-for="e in sorted" :key="e.id" :data-hid="e.id">
         <div class="row">
           <div class="main">
             <div class="title-line">
               <span class="title" :class="{ done: e.done }">{{ e.title }}</span>
               <n-tag v-if="e.done" size="small" type="success" :bordered="false">{{ t('schedule.done') }}</n-tag>
               <n-tag v-else-if="isOverdue(e)" size="small" type="error" :bordered="false">{{ t('schedule.overdue') }}</n-tag>
+              <n-tag v-if="e.recur" size="small" type="info" :bordered="false">{{ t('schedule.recur_' + e.recur) }}</n-tag>
             </div>
             <div class="meta">{{ fmt(e.dueAt) }}</div>
             <div v-if="e.detail" class="detail">{{ e.detail }}</div>
@@ -163,6 +159,9 @@ onUnmounted(() => {
         </n-form-item>
         <n-form-item :label="t('schedule.remind')">
           <n-select v-model:value="form.remind" :options="remindOptions" />
+        </n-form-item>
+        <n-form-item :label="t('schedule.recur')">
+          <n-select v-model:value="form.recur" :options="recurOptions" />
         </n-form-item>
       </n-form>
       <template #footer>

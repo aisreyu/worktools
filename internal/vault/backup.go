@@ -34,6 +34,7 @@ type backupPayload struct {
 	Schedules  []store.ScheduleEntry `json:"schedules"`
 	Files      []store.FileEntry     `json:"files"`
 	Categories []store.FileCategory  `json:"categories,omitempty"`
+	SecretCats []store.Category      `json:"secretCategories,omitempty"`
 }
 
 const backupAAD = "notebook:backup"
@@ -75,8 +76,12 @@ func (v *Vault) ExportBackup(password string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	secretCats, err := v.listSecretCategoryRows()
+	if err != nil {
+		return nil, err
+	}
 
-	payload, err := json.Marshal(backupPayload{URLs: urls, Secrets: secrets, OTPs: otps, Notes: notes, Schedules: schedules, Files: files, Categories: categories})
+	payload, err := json.Marshal(backupPayload{URLs: urls, Secrets: secrets, OTPs: otps, Notes: notes, Schedules: schedules, Files: files, Categories: categories, SecretCats: secretCats})
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +215,9 @@ func (v *Vault) ImportBackup(data []byte, password string) (imported int, err er
 		n++
 	}
 	if err := v.restoreCategoryRows(p.Categories); err != nil {
+		return n, err
+	}
+	if err := v.restoreSecretCategoryRows(p.SecretCats); err != nil {
 		return n, err
 	}
 	return n, nil

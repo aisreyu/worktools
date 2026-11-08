@@ -11,8 +11,14 @@ type URLEntry struct {
 	Username  string `json:"username"`
 	Password  string `json:"password,omitempty"`
 	Note      string `json:"note"`
+	Pinned    bool   `json:"pinned"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// DeletedAt is non-zero while the entry sits in the trash; the record
+	// is kept so it can be restored.
+	DeletedAt   int64  `json:"deletedAt,omitempty"`
+	// DeletedFrom records the origin kind (used only in the aggregated trash view).
+	DeletedFrom string `json:"deletedFrom,omitempty"`
 }
 
 // SecretEntry is a personal password vault item (M2).
@@ -26,8 +32,14 @@ type SecretEntry struct {
 	Password  string `json:"password,omitempty"`
 	Extra     string `json:"extra,omitempty"` // private key, AK/SK, ...
 	Note      string `json:"note"`
+	Pinned    bool   `json:"pinned"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// DeletedAt is non-zero while the entry sits in the trash; the record
+	// is kept so it can be restored.
+	DeletedAt   int64  `json:"deletedAt,omitempty"`
+	// DeletedFrom records the origin kind (used only in the aggregated trash view).
+	DeletedFrom string `json:"deletedFrom,omitempty"`
 }
 
 // OTPEntry is a TOTP/HOTP configuration (M3).
@@ -44,6 +56,11 @@ type OTPEntry struct {
 	Counter   int64  `json:"counter"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// DeletedAt is non-zero while the entry sits in the trash; the record
+	// is kept so it can be restored.
+	DeletedAt   int64  `json:"deletedAt,omitempty"`
+	// DeletedFrom records the origin kind (used only in the aggregated trash view).
+	DeletedFrom string `json:"deletedFrom,omitempty"`
 }
 
 // NoteEntry is a personal note (M4). Content is encrypted at rest.
@@ -62,6 +79,11 @@ type NoteEntry struct {
 	AttachmentMime string `json:"attachmentMime,omitempty"`
 	CreatedAt      int64  `json:"createdAt"`
 	UpdatedAt      int64  `json:"updatedAt"`
+	// DeletedAt is non-zero while the entry sits in the trash; the record
+	// is kept so it can be restored.
+	DeletedAt   int64  `json:"deletedAt,omitempty"`
+	// DeletedFrom records the origin kind (used only in the aggregated trash view).
+	DeletedFrom string `json:"deletedFrom,omitempty"`
 }
 
 // FileEntry is a private-folder document (M7). Data holds the base64 file body
@@ -79,6 +101,11 @@ type FileEntry struct {
 	Data      string `json:"data,omitempty"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// DeletedAt is non-zero while the entry sits in the trash; the record
+	// is kept so it can be restored.
+	DeletedAt   int64  `json:"deletedAt,omitempty"`
+	// DeletedFrom records the origin kind (used only in the aggregated trash view).
+	DeletedFrom string `json:"deletedFrom,omitempty"`
 }
 
 // FileCategory is a user-managed private-folder category (M8). Name is the
@@ -91,15 +118,30 @@ type FileCategory struct {
 	SortOrder int    `json:"sortOrder"`
 }
 
+// Category is a user-managed label used by the secret vault. Its display name
+// is encrypted at rest (under file_categories:name) and Code is a stable slug
+// that secret_entries.category matches, so renaming never orphans entries.
+type Category struct {
+	ID        int64  `json:"id"`
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	SortOrder int    `json:"sortOrder"`
+}
+
 // ClipboardItem is one captured clipboard entry (M9). Text is the decrypted
-// capture; it is encrypted at rest under clipboard_items:text. Kind is a coarse
-// label (link | code | text) used for filtering.
+// capture; it is encrypted at rest under clipboard_items:text. Images carry a
+// base64 PNG payload in Data (encrypted under clipboard_items:data) with its
+// MIME type and byte size. Kind is a coarse label (link | code | text | image |
+// file) used for filtering.
 type ClipboardItem struct {
 	ID        int64  `json:"id"`
 	Text      string `json:"text"`
 	Preview   string `json:"preview"`
 	Kind      string `json:"kind"`
 	Pinned    bool   `json:"pinned"`
+	Data      string `json:"data,omitempty"`
+	Mime      string `json:"mime,omitempty"`
+	Size      int64  `json:"size,omitempty"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
 }
@@ -123,4 +165,16 @@ type ScheduleEntry struct {
 	Notified  bool   `json:"notified"`
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// Recur is a recurrence rule: "" (one-shot), "daily", "weekly", "monthly".
+	Recur     string `json:"recur"`
+}
+
+// TrashItem is a lightweight, aggregated view of a soft-deleted entry shown in
+// the recycle bin. Kind is one of url | secret | otp | note | file.
+type TrashItem struct {
+	ID        int64  `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Subtitle  string `json:"subtitle"`
+	DeletedAt int64  `json:"deletedAt"`
 }

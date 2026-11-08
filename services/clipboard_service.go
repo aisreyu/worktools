@@ -21,16 +21,17 @@ const clipboardEventName = "nb:clipboard"
 // clipboardPollInterval is how often the OS clipboard is checked for new text.
 const clipboardPollInterval = 1500 * time.Millisecond
 
-// ClipboardService is the CopyLess-style clipboard manager: it captures text
-// copied anywhere in the OS, persists it encrypted, and exposes search, pin,
-// edit, delete and export operations.
+// ClipboardService is the CopyLess-style clipboard manager: it captures text,
+// images, file paths and rich text copied anywhere in the OS, persists them
+// encrypted, and exposes search, pin, edit, delete and export operations.
 type ClipboardService struct {
 	v *vault.Vault
 
-	mu       sync.Mutex
-	lastText string
-	stop     chan struct{}
-	done     chan struct{}
+	mu      sync.Mutex
+	lastKey string
+	lastSig int64
+	stop    chan struct{}
+	done    chan struct{}
 }
 
 // NewClipboardService wires the service to a vault.
@@ -74,7 +75,9 @@ func (s *ClipboardService) watch() {
 }
 
 // captureOnce reads the clipboard once. When force is false it respects the
-// auto-capture setting; either way it de-duplicates against the last seen text.
+// auto-capture setting; either way it de-duplicates against the last seen
+// capture. Content is read from the native pasteboard (text, images, file
+// paths, rich text), falling back to the Wails text API when unavailable.
 func (s *ClipboardService) captureOnce(force bool) {
 	if s.v.Locked() {
 		return
@@ -82,33 +85,50 @@ func (s *ClipboardService) captureOnce(force bool) {
 	if !force && !s.v.ClipboardAutoCapture() {
 		return
 	}
-	app := application.Get()
-	if app == nil || app.Clipboard == nil {
+	cap, sig := s.read()
+	if cap.Kind == "" {
 		return
 	}
-	text, ok := app.Clipboard.Text()
-	if !ok {
-		return
-	}
-	text = clipboard.Normalize(text)
-	if strings.TrimSpace(text) == "" {
-		return
-	}
+	key := cap.Key()
+
 	s.mu.Lock()
-	if text == s.lastText {
+	if key == s.lastKey && sig == s.lastSig && sig != 0 {
 		s.mu.Unlock()
 		return
 	}
-	s.lastText = text
+	s.lastKey, s.lastSig = key, sig
 	s.mu.Unlock()
 
-	it, err := s.v.SaveClipboard(text)
+	it, err := s.v.SaveClipboardCapture(cap)
 	if err != nil || it.ID == 0 {
 		return
 	}
-	if app := application.Get(); app != nil {
-		app.Event.Emit(clipboardEventName)
+	s.emit()
+}
+
+// read captures the current clipboard from the native pasteboard reader, using
+// the Wails text API as a fallback. It returns the capture and the pasteboard
+// change token (0 when not available).
+func (s *ClipboardService) read() (clipboard.Capture, int64) {
+	if cap, sig := clipboard.Read(); cap.Kind != "" {
+		return cap, sig
 	}
+	app := application.Get()
+	if app == nil || app.Clipboard == nil {
+		return clipboard.Capture{}, 0
+	}
+	text, ok := app.Clipboard.Text()
+	if !ok {
+		return clipboard.Capture{}, 0
+	}
+	return clipboard.TextCapture(text), 0
+}
+
+// remember records the identity of a capture so the poller does not re-store it.
+func (s *ClipboardService) remember(cap clipboard.Capture, sig int64) {
+	s.mu.Lock()
+	s.lastKey, s.lastSig = cap.Key(), sig
+	s.mu.Unlock()
 }
 
 // ---- query ----
@@ -136,47 +156,42 @@ func (s *ClipboardService) Add(text string) (store.ClipboardItem, error) {
 	if s.v.Locked() {
 		return store.ClipboardItem{}, vault.ErrLocked
 	}
-	it, err := s.v.SaveClipboard(text)
+	cap := clipboard.TextCapture(text)
+	it, err := s.v.SaveClipboardCapture(cap)
 	if err != nil {
 		return store.ClipboardItem{}, err
 	}
-	s.mu.Lock()
-	s.lastText = clipboard.Normalize(text)
-	s.mu.Unlock()
+	s.remember(cap, 0)
 	if it.ID != 0 {
 		s.emit()
 	}
 	return it, nil
 }
 
-// CaptureNow reads the current OS clipboard and stores it regardless of the
-// auto-capture setting.
+// CaptureNow reads the current OS clipboard (text, image or file) and stores it
+// regardless of the auto-capture setting.
 func (s *ClipboardService) CaptureNow() (store.ClipboardItem, error) {
 	if s.v.Locked() {
 		return store.ClipboardItem{}, vault.ErrLocked
 	}
-	app := application.Get()
-	if app == nil || app.Clipboard == nil {
-		return store.ClipboardItem{}, errText("clipboard unavailable")
-	}
-	text, ok := app.Clipboard.Text()
-	if !ok || strings.TrimSpace(text) == "" {
+	cap, sig := s.read()
+	if cap.Kind == "" {
 		return store.ClipboardItem{}, errText("clipboard is empty")
 	}
-	it, err := s.v.SaveClipboard(text)
+	it, err := s.v.SaveClipboardCapture(cap)
 	if err != nil {
 		return store.ClipboardItem{}, err
 	}
-	s.mu.Lock()
-	s.lastText = clipboard.Normalize(text)
-	s.mu.Unlock()
+	s.remember(cap, sig)
 	if it.ID != 0 {
 		s.emit()
 	}
 	return it, nil
 }
 
-// Copy puts an item's text back on the OS clipboard without re-capturing it.
+// Copy puts an item back on the OS clipboard without triggering a re-capture.
+// Image items are written as text (their descriptive label + hash) because the
+// Wails clipboard API only supports text.
 func (s *ClipboardService) Copy(id int64) error {
 	if s.v.Locked() {
 		return vault.ErrLocked
@@ -190,13 +205,33 @@ func (s *ClipboardService) Copy(id int64) error {
 			if app := application.Get(); app != nil && app.Clipboard != nil {
 				app.Clipboard.SetText(it.Text)
 			}
-			s.mu.Lock()
-			s.lastText = clipboard.Normalize(it.Text)
-			s.mu.Unlock()
+			s.remember(clipboard.Capture{Kind: it.Kind, Text: it.Text}, 0)
 			return nil
 		}
 	}
 	return errText("clipboard item not found")
+}
+
+// GetImage returns an image capture's payload as a base64 PNG string, or "" for
+// non-image items.
+func (s *ClipboardService) GetImage(id int64) (string, error) {
+	if s.v.Locked() {
+		return "", vault.ErrLocked
+	}
+	return s.v.ClipboardData(id)
+}
+
+// ClearData erases a stored image payload, mirroring how secrets are wiped
+// after copy. The entry's metadata is kept.
+func (s *ClipboardService) ClearData(id int64) error {
+	if s.v.Locked() {
+		return vault.ErrLocked
+	}
+	if err := s.v.ClearClipboardData(id); err != nil {
+		return err
+	}
+	s.emit()
+	return nil
 }
 
 // UpdateText edits a capture in place.
@@ -210,9 +245,7 @@ func (s *ClipboardService) UpdateText(id int64, text string) error {
 	if err := s.v.UpdateClipboardText(id, text); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.lastText = clipboard.Normalize(text)
-	s.mu.Unlock()
+	s.remember(clipboard.TextCapture(text), 0)
 	s.emit()
 	return nil
 }
@@ -300,8 +333,12 @@ func (s *ClipboardService) ExportText(query, kind string) (string, error) {
 		if it.Pinned {
 			mark = " [pinned]"
 		}
+		body := it.Text
+		if it.Kind == clipboard.KindImage {
+			body = it.Preview
+		}
 		fmt.Fprintf(&b, "## %s%s (%s)\n\n%s\n\n",
-			time.Unix(it.CreatedAt, 0).Format("2006-01-02 15:04:05"), mark, it.Kind, it.Text)
+			time.Unix(it.CreatedAt, 0).Format("2006-01-02 15:04:05"), mark, it.Kind, body)
 	}
 	return b.String(), nil
 }

@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { NEmpty, NModal, useMessage } from 'naive-ui'
 import { WorkbenchService, type SearchHit } from '../lib/api'
 import { vault } from '../lib/vaultState'
-import { overlays, closePalette } from '../lib/uiState'
+import { overlays, closePalette, openClipboard } from '../lib/uiState'
 import { t } from '../lib/i18n'
 
 const router = useRouter()
@@ -22,6 +22,8 @@ const kindIcons: Record<string, string> = {
   otp: '🔢',
   note: '📝',
   schedule: '📅',
+  file: '📎',
+  clipboard: '📋',
   tool: '🧰',
 }
 
@@ -31,6 +33,8 @@ const kindLabels = computed<Record<string, string>>(() => ({
   otp: t('menu.otp'),
   note: t('menu.notes'),
   schedule: t('menu.schedule'),
+  file: t('menu.files'),
+  clipboard: t('menu.clipboard'),
   tool: t('menu.toolbox'),
 }))
 
@@ -78,8 +82,14 @@ function choose(hit: SearchHit | undefined) {
   closePalette()
   if (h.kind === 'tool') {
     router.push({ name: 'toolbox' })
-  } else {
-    router.push({ name: h.route.replace(/^\//, '') })
+  } else if (h.kind === 'clipboard') {
+    openClipboard()
+  } else if (h.kind === 'file') {
+    router.push({ name: 'files', query: { highlight: String(h.id) } })
+  } else if (h.route) {
+    // Deep-link: pass the specific entry id so the target view can scroll to
+    // and flash the matched row instead of just landing on the list page.
+    router.push({ name: h.route.replace(/^\//, ''), query: { highlight: String(h.id) } })
   }
 }
 </script>

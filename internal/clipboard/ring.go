@@ -10,6 +10,8 @@ type Item struct {
 	Preview string
 	Kind    string
 	Pinned  bool
+	Data    []byte // PNG bytes for image captures
+	Mime    string
 	At      time.Time
 }
 

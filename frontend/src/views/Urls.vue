@@ -16,7 +16,11 @@ import {
 } from 'naive-ui'
 import { Browser, Clipboard } from '@wailsio/runtime'
 import { OpenURLService, VaultService, WorkbenchService, type URLEntry, type URLHealthResult } from '../lib/api'
+import { copyWithAutoClear } from '../lib/clipboardClear'
 import { t, errText } from '../lib/i18n'
+import { useRouteHighlight } from '../lib/routeHighlight'
+
+useRouteHighlight()
 
 const message = useMessage()
 
@@ -32,7 +36,7 @@ const activeEnv = ref<string>('all')
 
 function blank(): Row {
   return {
-    id: 0, title: '', url: '', env: '', tags: '', username: '', password: '', note: '',
+    id: 0, title: '', url: '', env: '', tags: '', username: '', password: '', note: '', pinned: false,
     createdAt: 0, updatedAt: 0,
   }
 }
@@ -72,7 +76,10 @@ const groups = computed(() => {
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(r)
   }
-  return Array.from(map.entries()).map(([env, items]) => ({ env, items }))
+  return Array.from(map.entries()).map(([env, items]) => ({
+    env,
+    items: items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.id - a.id),
+  }))
 })
 
 /** First letter for the card icon fallback. */
@@ -132,7 +139,16 @@ async function remove(row: Row) {
   try {
     await VaultService.DeleteURL(row.id)
     await load()
-    message.success('已删除')
+    message.success(t('trash.movedHint'))
+  } catch (e) {
+    message.error(errText(e))
+  }
+}
+
+async function togglePin(row: Row) {
+  try {
+    await VaultService.SetURLPinned(row.id, !row.pinned)
+    await load()
   } catch (e) {
     message.error(errText(e))
   }
@@ -143,12 +159,8 @@ async function copyPassword(row: Row) {
     message.warning('该条目没有保存密码')
     return
   }
-  await Clipboard.SetText(row.password)
-  message.success('密码已复制（30 秒后请自行清理剪贴板）')
-  setTimeout(async () => {
-    const cur = await Clipboard.Text()
-    if (cur === row.password) await Clipboard.SetText('')
-  }, 30_000)
+  await copyWithAutoClear(row.password)
+  message.success('密码已复制（N 秒后自动清理剪贴板）')
 }
 
 async function copyUsername(row: Row) {
@@ -175,13 +187,8 @@ async function copyAll(row: Row) {
     return
   }
   const text = lines.join('\n')
-  await Clipboard.SetText(text)
-  message.success('全部信息已复制（30 秒后请自行清理剪贴板）')
-  const snapshot = text
-  setTimeout(async () => {
-    const cur = await Clipboard.Text()
-    if (cur === snapshot) await Clipboard.SetText('')
-  }, 30_000)
+  await copyWithAutoClear(text)
+  message.success('全部信息已复制（N 秒后自动清理剪贴板）')
 }
 
 /** Open in an embedded window with credential auto-fill. */
@@ -196,6 +203,29 @@ async function openWithFill(row: Row) {
 /** Open in the system browser. */
 function openExternal(row: Row) {
   if (row.url) Browser.OpenURL(row.url)
+}
+
+/** Open every URL entry in the active env (or all when "all") at once. */
+const openingEnv = ref(false)
+async function openActiveEnv() {
+  if (rows.value.length === 0) return
+  const label = activeEnv.value === 'all' ? '全部' : activeEnv.value
+  openingEnv.value = true
+  try {
+    const n = await OpenURLService.OpenEnvBatch(activeEnv.value === 'all' ? '' : activeEnv.value)
+    if (activeEnv.value === 'all') {
+      // OpenEnvBatch('') only matches empty-env entries; for "all" iterate every env.
+      let total = n
+      for (const e of envs.value) total += await OpenURLService.OpenEnvBatch(e)
+      message.success(`已打开 ${total} 个窗口（${label}）`)
+    } else {
+      message.success(`已打开 ${n} 个窗口（${label}）`)
+    }
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    openingEnv.value = false
+  }
 }
 
 const envOptions = computed(() => [
@@ -253,6 +283,9 @@ onMounted(load)
         <n-button size="small" :loading="healthRunning" @click="runHealthCheck">
           🩺 {{ t('urlhealth.run') }}
         </n-button>
+        <n-button size="small" :loading="openingEnv" :disabled="rows.length === 0" @click="openActiveEnv">
+          🚀 {{ t('urls.openEnv') }}
+        </n-button>
         <n-button type="primary" size="small" @click="openCreate">新增</n-button>
       </n-space>
     </div>
@@ -294,7 +327,7 @@ onMounted(load)
         <span class="nav-group-count">{{ g.items.length }}</span>
       </h3>
       <div class="nav-grid">
-        <div v-for="r in g.items" :key="r.id" class="nav-card">
+        <div v-for="r in g.items" :key="r.id" class="nav-card" :data-hid="r.id">
           <div class="nav-card-main" @click="openWithFill(r)">
             <div class="nav-card-icon">
               <img
@@ -330,6 +363,9 @@ onMounted(load)
             <n-button size="tiny" quaternary @click.stop="copyPassword(r)">复制密码</n-button>
             <n-button size="tiny" quaternary @click.stop="copyAll(r)">复制全部</n-button>
             <n-button size="tiny" quaternary @click.stop="openExternal(r)">浏览器</n-button>
+            <n-button size="tiny" quaternary :type="r.pinned ? 'warning' : 'default'" @click.stop="togglePin(r)">
+              {{ r.pinned ? '取消置顶' : '置顶' }}
+            </n-button>
             <n-button size="tiny" quaternary @click.stop="openEdit(r)">编辑</n-button>
             <n-popconfirm @positive-click="remove(r)">
               <template #trigger>

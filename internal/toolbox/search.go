@@ -7,7 +7,7 @@ import (
 
 // SearchDoc is one indexable item for cross-module quick search.
 type SearchDoc struct {
-	Kind     string `json:"kind"` // url | secret | otp | note | tool
+	Kind     string `json:"kind"` // url | secret | otp | note | schedule | file | clipboard | tool
 	ID       int64  `json:"id"`
 	Title    string `json:"title"`
 	Subtitle string `json:"subtitle"`

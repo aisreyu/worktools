@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -105,6 +106,16 @@ func (s *ToolboxService) TCPing(host string, port, count, timeoutMS, intervalMS 
 // Whois queries registration data for a domain.
 func (s *ToolboxService) Whois(domain string, timeoutMS int) (toolbox.WhoisResult, error) {
 	return toolbox.Whois(context.Background(), domain, timeoutMS)
+}
+
+// IPLookup geolocates a single IP or domain (empty = caller's own public IP).
+func (s *ToolboxService) IPLookup(query string, timeoutMS int) (toolbox.IPLookupResult, error) {
+	return toolbox.IPLookup(context.Background(), query, timeoutMS)
+}
+
+// IPLookupBatch geolocates several IPs or domains at once.
+func (s *ToolboxService) IPLookupBatch(queries []string, timeoutMS int) ([]toolbox.IPLookupResult, error) {
+	return toolbox.IPLookupBatch(context.Background(), queries, timeoutMS)
 }
 
 // GenerateSelfSignedCert creates a self-signed certificate and key in PEM form.
@@ -220,6 +231,18 @@ func (s *ToolboxService) RandomPhones(n int) ([]string, error) {
 // checksums (for testing only).
 func (s *ToolboxService) RandomIDCards(n int) ([]string, error) {
 	return toolbox.RandomIDCards(n)
+}
+
+// LookupPhone resolves a mobile number's operator and region from the
+// bundled offline dataset.
+func (s *ToolboxService) LookupPhone(number string) toolbox.PhoneResult {
+	return toolbox.LookupPhone(number)
+}
+
+// LookupIDCard resolves an ID number's region and performs an offline
+// structural/checksum validity check.
+func (s *ToolboxService) LookupIDCard(number string) toolbox.IDCardResult {
+	return toolbox.LookupIDCard(number)
 }
 
 // SavePasswordToVault stores a generated password into the vault as a
@@ -445,4 +468,152 @@ func (s *ToolboxService) CompressBatch(inPaths []string, outDir string, opts too
 // CompressResultPath suggests the output path a compressed image would use.
 func (s *ToolboxService) CompressResultPath(inPath, outDir, mimeType string) string {
 	return toolbox.CompressOutputPath(inPath, outDir, mimeType)
+}
+
+// SaveBytes writes raw bytes (base64 from JS, decoded by Wails) to path. Used
+// by the compress/watermark tools to export a single result via a save dialog.
+func (s *ToolboxService) SaveBytes(path string, data []byte) error {
+	if strings.TrimSpace(path) == "" {
+		return errText("path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return errText("create dir: " + err.Error())
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return errText("write file: " + err.Error())
+	}
+	return nil
+}
+
+// CompressBatchZip compresses every image in inPaths and packages the results
+// into a single ZIP archive, writing it to outPath.
+func (s *ToolboxService) CompressBatchZip(inPaths []string, outPath string, opts toolbox.CompressOptions) error {
+	entries := make([]toolbox.ZipEntry, 0, len(inPaths))
+	for _, p := range inPaths {
+		res, data, err := toolbox.CompressFile(p, opts)
+		if err != nil {
+			return err
+		}
+		_ = res
+		ext := ".jpg"
+		switch res.Mime {
+		case "image/png":
+			ext = ".png"
+		case "image/webp":
+			ext = ".webp"
+		}
+		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		entries = append(entries, toolbox.ZipEntry{Name: base + "_min" + ext, Data: data})
+	}
+	blob, err := toolbox.WriteZip(entries)
+	if err != nil {
+		return err
+	}
+	return toolbox.WriteFileBytes(outPath, blob)
+}
+
+// ---- image format conversion ----
+
+// ConvertImage converts an image file to another format and returns metadata
+// plus a base64 preview. Nothing is written to disk.
+func (s *ToolboxService) ConvertImage(inPath string, opts toolbox.ConvertOptions) (toolbox.ConvertResult, error) {
+	res, _, err := toolbox.ConvertFile(inPath, opts)
+	return res, err
+}
+
+// ConvertBatch converts many images. When outDir is non-empty, each converted
+// image is written there; otherwise only metadata is returned.
+func (s *ToolboxService) ConvertBatch(inPaths []string, outDir string, opts toolbox.ConvertOptions) ([]toolbox.ConvertResult, error) {
+	out := make([]toolbox.ConvertResult, 0, len(inPaths))
+	for _, p := range inPaths {
+		res, data, err := toolbox.ConvertFile(p, opts)
+		if err != nil {
+			return out, err
+		}
+		if strings.TrimSpace(outDir) != "" {
+			dest := toolbox.ConvertOutputPath(p, outDir, res.ToFormat, "_conv")
+			if err := os.WriteFile(dest, data, 0o644); err != nil {
+				return out, errText("write output: " + err.Error())
+			}
+			res.Data = ""
+		}
+		out = append(out, res)
+	}
+	return out, nil
+}
+
+// ConvertBatchZip converts every image in inPaths and packages the results into
+// a single ZIP archive written to outPath.
+func (s *ToolboxService) ConvertBatchZip(inPaths []string, outPath string, opts toolbox.ConvertOptions) error {
+	entries := make([]toolbox.ZipEntry, 0, len(inPaths))
+	for _, p := range inPaths {
+		res, data, err := toolbox.ConvertFile(p, opts)
+		if err != nil {
+			return err
+		}
+		ext := ".png"
+		switch res.ToFormat {
+		case "jpeg":
+			ext = ".jpg"
+		case "gif":
+			ext = ".gif"
+		case "bmp":
+			ext = ".bmp"
+		case "tiff":
+			ext = ".tiff"
+		}
+		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		entries = append(entries, toolbox.ZipEntry{Name: base + "_conv" + ext, Data: data})
+	}
+	blob, err := toolbox.WriteZip(entries)
+	if err != nil {
+		return err
+	}
+	return toolbox.WriteFileBytes(outPath, blob)
+}
+
+// WatermarkBatchZip applies the watermark to every file in inPaths and packages
+// the watermarked results into a single ZIP archive written to outPath.
+func (s *ToolboxService) WatermarkBatchZip(inPaths []string, outPath, pages string, opts toolbox.WatermarkTextOptions) error {
+	entries := make([]toolbox.ZipEntry, 0, len(inPaths))
+	for _, p := range inPaths {
+		var data []byte
+		var err error
+		ext := strings.ToLower(filepath.Ext(p))
+		if strings.EqualFold(ext, ".pdf") {
+			data, err = toolbox.WatermarkPDFBytes(p, pages, opts)
+			ext = ".pdf"
+		} else {
+			data, ext, err = toolbox.WatermarkImageBytes(p, opts)
+		}
+		if err != nil {
+			return err
+		}
+		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		entries = append(entries, toolbox.ZipEntry{Name: base + "_wm" + ext, Data: data})
+	}
+	blob, err := toolbox.WriteZip(entries)
+	if err != nil {
+		return err
+	}
+	return toolbox.WriteFileBytes(outPath, blob)
+}
+
+// CompressFoldersZip archives each folder in dirs (recursively) into a ZIP and
+// writes them next to the source folder as "<name>.zip". Returns the archive
+// paths that were created.
+func (s *ToolboxService) CompressFoldersZip(dirs []string) ([]string, error) {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		name := filepath.Base(filepath.Clean(d))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = "archive"
+		}
+		dest := filepath.Join(filepath.Dir(filepath.Clean(d)), name+".zip")
+		if err := toolbox.ZipDir(d, dest); err != nil {
+			return out, err
+		}
+		out = append(out, dest)
+	}
+	return out, nil
 }

@@ -237,3 +237,56 @@ func TestBackupExportImport(t *testing.T) {
 		t.Fatalf("notes after import: %d", len(notes))
 	}
 }
+
+func TestPinnedOrderingAndPersistence(t *testing.T) {
+	v, _ := openTestVault(t)
+	if err := v.Init("master-password-1"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	firstID, err := v.SaveURL(store.URLEntry{Title: "first", URL: "https://a"})
+	if err != nil {
+		t.Fatalf("save first: %v", err)
+	}
+	if _, err := v.SaveURL(store.URLEntry{Title: "second", URL: "https://b"}); err != nil {
+		t.Fatalf("save second: %v", err)
+	}
+
+	// Newest first by default.
+	list, _ := v.ListURLs()
+	if list[0].Title != "second" {
+		t.Fatalf("expected newest first, got %q", list[0].Title)
+	}
+
+	// Pin the older entry; it should now sort to the top and report Pinned.
+	if err := v.SetURLPinned(firstID, true); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	list, _ = v.ListURLs()
+	if list[0].Title != "first" || !list[0].Pinned {
+		t.Fatalf("pinned entry did not sort first: %+v", list)
+	}
+
+	// Persistence: pinned survives a reload via SaveURL round-trip of the list.
+	saved := list[0]
+	if _, err := v.SaveURL(saved); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	list, _ = v.ListURLs()
+	if !list[0].Pinned {
+		t.Fatalf("pinned flag not persisted through save: %+v", list[0])
+	}
+
+	// Secret pinned flag round-trips too.
+	sid, err := v.SaveSecret(store.SecretEntry{Title: "db", Category: "server"})
+	if err != nil {
+		t.Fatalf("save secret: %v", err)
+	}
+	if err := v.SetSecretPinned(sid, true); err != nil {
+		t.Fatalf("pin secret: %v", err)
+	}
+	secrets, _ := v.ListSecrets()
+	if len(secrets) != 1 || !secrets[0].Pinned {
+		t.Fatalf("secret pinned not set: %+v", secrets)
+	}
+}

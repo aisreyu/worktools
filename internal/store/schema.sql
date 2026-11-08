@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS url_entries (
     password_ct    BLOB,
     password_nonce BLOB,
     note           TEXT    NOT NULL DEFAULT '',
+    pinned         INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL
+    updated_at     INTEGER NOT NULL,
+    deleted_at   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_url_env ON url_entries(env);
 
@@ -42,8 +44,10 @@ CREATE TABLE IF NOT EXISTS secret_entries (
     extra_ct       BLOB,
     extra_nonce    BLOB,
     note           TEXT    NOT NULL DEFAULT '',
+    pinned         INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL
+    updated_at     INTEGER NOT NULL,
+    deleted_at   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_secret_category ON secret_entries(category);
 
@@ -61,7 +65,8 @@ CREATE TABLE IF NOT EXISTS otp_entries (
     otp_type     TEXT    NOT NULL DEFAULT 'totp',
     counter      INTEGER NOT NULL DEFAULT 0,
     created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    deleted_at   INTEGER NOT NULL DEFAULT 0
 );
 
 -- M4: personal notes (multiple records).
@@ -77,7 +82,8 @@ CREATE TABLE IF NOT EXISTS note_entries (
     attach_name  TEXT    NOT NULL DEFAULT '',
     attach_mime  TEXT    NOT NULL DEFAULT '',
     created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    deleted_at   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_note_updated ON note_entries(updated_at DESC);
 
@@ -108,6 +114,7 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
     remind       INTEGER NOT NULL DEFAULT 1,  -- minutes before due; 0 = no remind
     done         INTEGER NOT NULL DEFAULT 0,
     notified     INTEGER NOT NULL DEFAULT 0,  -- reminder already fired
+    recur        TEXT    NOT NULL DEFAULT '',  -- '', 'daily', 'weekly', 'monthly'
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL
 );
@@ -129,7 +136,8 @@ CREATE TABLE IF NOT EXISTS file_entries (
     data_nonce  BLOB,
     disk_path   TEXT    NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
+    updated_at  INTEGER NOT NULL,
+    deleted_at   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_file_category ON file_entries(category);
 
@@ -147,13 +155,33 @@ CREATE TABLE IF NOT EXISTS file_categories (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_file_categories_code ON file_categories(code);
 
--- M9: clipboard history captured from the OS clipboard (CopyLess-style). The
--- captured text is encrypted at rest under clipboard_items:text; kind is a
--- coarse label (link | code | text) used for filtering and search.
+-- User-managed categories for the secret vault. Mirrors file_categories so
+-- the two modules share the same encrypted-name + stable-slug strategy.
+CREATE TABLE IF NOT EXISTS secret_categories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    code        TEXT    NOT NULL,
+    name_ct     BLOB    NOT NULL,
+    name_nonce  BLOB    NOT NULL,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secret_categories_code ON secret_categories(code);
+
+-- M9: clipboard history captured from the OS clipboard (CopyLess-style). Text
+-- is encrypted at rest under clipboard_items:text, images under
+-- clipboard_items:data. Kind is a coarse label (link | code | text | image |
+-- file) used for filtering and search; images carry a PNG payload in data_ct
+-- with data_sha for de-duplication.
 CREATE TABLE IF NOT EXISTS clipboard_items (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    text_ct    BLOB    NOT NULL,
-    text_nonce BLOB    NOT NULL,
+    text_ct    BLOB,
+    text_nonce BLOB,
+    data_ct    BLOB,
+    data_nonce BLOB,
+    data_mime  TEXT    NOT NULL DEFAULT '',
+    data_sha   TEXT    NOT NULL DEFAULT '',
+    data_size  INTEGER NOT NULL DEFAULT 0,
     kind       TEXT    NOT NULL DEFAULT 'text',
     pinned     INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,

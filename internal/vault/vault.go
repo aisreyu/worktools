@@ -21,8 +21,11 @@ const (
 	aadRecWrap     = "recovery_meta:wrap"
 	aadFileData    = "file_entries:data"
 	aadFileCatName = "file_categories:name"
+	aadSecretCatName = "file_categories:name"
 	aadClipText    = "clipboard_items:text"
+	aadClipData    = "clipboard_items:data"
 	aadClipSetting = "app_settings:clipboard"
+	aadAppSecret   = "app_settings:appSecret"
 )
 
 // Vault ties the SQLite database to the in-memory key material. It is the only
@@ -103,6 +106,9 @@ func (v *Vault) Init(password string) error {
 	if err := v.EnsureCategoryDefaults(); err != nil {
 		return err
 	}
+	if err := v.EnsureSecretCategoryDefaults(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -143,6 +149,9 @@ func (v *Vault) Unlock(password string) error {
 	v.crypto = c
 	v.mu.Unlock()
 	if err := v.EnsureCategoryDefaults(); err != nil {
+		return err
+	}
+	if err := v.EnsureSecretCategoryDefaults(); err != nil {
 		return err
 	}
 	return nil

@@ -22,8 +22,8 @@ func NewWorkbenchService(v *vault.Vault) *WorkbenchService {
 
 // ---- 全局快速搜索 ----
 
-// Search ranks every indexed item (URLs, secrets, OTP, notes, schedules and
-// toolbox tools) against a free-text query.
+// Search ranks every indexed item (URLs, secrets, OTP, notes, schedules,
+// files, clipboard history and toolbox tools) against a free-text query.
 func (s *WorkbenchService) Search(query string, limit int) ([]toolbox.SearchHit, error) {
 	if s.v.Locked() {
 		return nil, vault.ErrLocked
@@ -98,6 +98,48 @@ func (s *WorkbenchService) buildDocs() ([]toolbox.SearchDoc, error) {
 	for _, e := range schedules {
 		docs = append(docs, toolbox.SearchDoc{
 			Kind: "schedule", ID: e.ID, Title: e.Title, Subtitle: e.Detail, Route: "/schedule",
+		})
+	}
+
+	files, err := s.v.ListFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range files {
+		sub := e.Category
+		if e.Mime != "" {
+			if sub != "" {
+				sub += " · "
+			}
+			sub += e.Mime
+		}
+		docs = append(docs, toolbox.SearchDoc{
+			Kind: "file", ID: e.ID, Title: e.Title, Subtitle: sub,
+			Body: e.Category + " " + e.Note, Route: "/files",
+		})
+	}
+
+	clips, err := s.v.ListClipboard("", "")
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range clips {
+		body := e.Text
+		if body == "" {
+			body = e.Preview
+		}
+		if len([]rune(body)) > 200 {
+			body = string([]rune(body)[:200])
+		}
+		title := e.Preview
+		if title == "" {
+			title = body
+		}
+		if len([]rune(title)) > 60 {
+			title = string([]rune(title)[:60])
+		}
+		docs = append(docs, toolbox.SearchDoc{
+			Kind: "clipboard", ID: e.ID, Title: title, Subtitle: e.Kind, Body: body, Route: "",
 		})
 	}
 

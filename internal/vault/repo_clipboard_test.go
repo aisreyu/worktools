@@ -3,6 +3,8 @@ package vault
 import (
 	"strings"
 	"testing"
+
+	"github.com/aisreyu/worktools/internal/clipboard"
 )
 
 func TestClipboardSaveListDedupe(t *testing.T) {
@@ -56,7 +58,6 @@ func TestClipboardSaveListDedupe(t *testing.T) {
 	if strings.Contains(string(ct), "hello") {
 		t.Fatal("clipboard text was not encrypted at rest")
 	}
-
 	// Substring + kind filters.
 	if got, _ := v.ListClipboard("HELLO", ""); len(got) != 1 {
 		t.Fatalf("query filter failed: %+v", got)
@@ -145,5 +146,77 @@ func TestClipboardLocked(t *testing.T) {
 	}
 	if _, err := v.SaveClipboard("x"); err != ErrLocked {
 		t.Fatalf("expected ErrLocked on save, got %v", err)
+	}
+}
+
+func TestClipboardCaptureImageAndFile(t *testing.T) {
+	v, _ := openTestVault(t)
+	if err := v.Init("correct horse battery"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// A small but valid PNG (1x1). Header only is enough for our size/shape.
+	png := []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	}
+	cap := clipboard.ImageCapture(png)
+	it, err := v.SaveClipboardCapture(cap)
+	if err != nil {
+		t.Fatalf("save image: %v", err)
+	}
+	if it.ID == 0 || it.Kind != clipboard.KindImage {
+		t.Fatalf("unexpected image item: %+v", it)
+	}
+	if it.Mime != "image/png" || it.Size != int64(len(png)) {
+		t.Fatalf("image meta wrong: %+v", it)
+	}
+
+	// Re-saving the same image is de-duplicated by hash.
+	if dup, _ := v.SaveClipboardCapture(cap); dup.ID != 0 {
+		t.Fatalf("expected image dup to be skipped, got %+v", dup)
+	}
+
+	// The payload is encrypted at rest (no PNG magic in the raw column).
+	var dataCT []byte
+	if err := v.db.QueryRow(`SELECT data_ct FROM clipboard_items WHERE id=?`, it.ID).Scan(&dataCT); err != nil {
+		t.Fatalf("read data_ct: %v", err)
+	}
+	if len(dataCT) == 0 || strings.Contains(string(dataCT), "PNG") {
+		t.Fatal("clipboard image was not encrypted at rest")
+	}
+
+	// Listing decrypts the payload back to base64.
+	list, err := v.ListClipboard("", "image")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || list[0].Data == "" || list[0].Mime != "image/png" {
+		t.Fatalf("expected one image with payload, got %+v", list)
+	}
+	if list[0].Preview == "" {
+		t.Fatal("image preview should not be empty")
+	}
+
+	// ClearClipboardData wipes the payload but keeps the row.
+	if err := v.ClearClipboardData(it.ID); err != nil {
+		t.Fatalf("clear data: %v", err)
+	}
+	if got, _ := v.ClipboardData(it.ID); got != "" {
+		t.Fatalf("expected cleared payload, got %q", got)
+	}
+
+	// File captures keep their text and classify as kind=file.
+	files := clipboard.FileCapture([]string{"/tmp/a.txt", "/tmp/b.txt"})
+	if files.Kind != clipboard.KindFile {
+		t.Fatalf("expected file kind, got %q", files.Kind)
+	}
+	f, err := v.SaveClipboardCapture(files)
+	if err != nil {
+		t.Fatalf("save file: %v", err)
+	}
+	if f.Kind != clipboard.KindFile || f.Data != "" {
+		t.Fatalf("unexpected file item: %+v", f)
 	}
 }

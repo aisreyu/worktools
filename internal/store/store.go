@@ -61,6 +61,27 @@ func migrate(db *sql.DB) error {
 		{"note_entries", "attach_nonce", "ALTER TABLE note_entries ADD COLUMN attach_nonce BLOB"},
 		{"note_entries", "attach_name", "ALTER TABLE note_entries ADD COLUMN attach_name TEXT NOT NULL DEFAULT ''"},
 		{"note_entries", "attach_mime", "ALTER TABLE note_entries ADD COLUMN attach_mime TEXT NOT NULL DEFAULT ''"},
+		// clipboard_items gained image/binary payload columns when capture was
+		// extended beyond plain text.
+		{"clipboard_items", "data_ct", "ALTER TABLE clipboard_items ADD COLUMN data_ct BLOB"},
+		{"clipboard_items", "data_nonce", "ALTER TABLE clipboard_items ADD COLUMN data_nonce BLOB"},
+		{"clipboard_items", "data_mime", "ALTER TABLE clipboard_items ADD COLUMN data_mime TEXT NOT NULL DEFAULT ''"},
+		{"clipboard_items", "data_sha", "ALTER TABLE clipboard_items ADD COLUMN data_sha TEXT NOT NULL DEFAULT ''"},
+		{"clipboard_items", "data_size", "ALTER TABLE clipboard_items ADD COLUMN data_size INTEGER NOT NULL DEFAULT 0"},
+		// url_entries and secret_entries gained a pinned flag so frequently used
+		// entries float to the top of their lists.
+		{"url_entries", "pinned", "ALTER TABLE url_entries ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"},
+		{"secret_entries", "pinned", "ALTER TABLE secret_entries ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"},
+		// Soft-delete support: a non-zero deleted_at marks an entry as sitting
+		// in the trash instead of being physically removed.
+		{"url_entries", "deleted_at", "ALTER TABLE url_entries ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"},
+		{"secret_entries", "deleted_at", "ALTER TABLE secret_entries ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"},
+		{"otp_entries", "deleted_at", "ALTER TABLE otp_entries ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"},
+		{"note_entries", "deleted_at", "ALTER TABLE note_entries ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"},
+		{"file_entries", "deleted_at", "ALTER TABLE file_entries ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"},
+		// Schedule entries gained an optional recurrence rule (advances due_at
+		// when a recurring item is marked done).
+		{"schedule_entries", "recur", "ALTER TABLE schedule_entries ADD COLUMN recur TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		ok, err := hasColumn(db, a.table, a.column)

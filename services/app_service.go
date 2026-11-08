@@ -1,6 +1,11 @@
 package services
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/aisreyu/worktools/internal/config"
 )
 
@@ -15,6 +20,25 @@ func NewAppService() *AppService { return &AppService{} }
 
 // Platform returns the current OS ("darwin", "windows", "linux").
 func (s *AppService) Platform() string { return config.Platform() }
+
+// SandboxPath returns a writable path inside the app's private data directory.
+// Android has no save-file dialog, so mobile clients write exports here first
+// and then hand the file to the OS share/Downloads provider.
+func (s *AppService) SandboxPath(name string) (string, error) {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "", errors.New("file name is required")
+	}
+	dir, err := config.AppDir()
+	if err != nil {
+		return "", err
+	}
+	exports := filepath.Join(dir, "exports")
+	if err := os.MkdirAll(exports, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(exports, base), nil
+}
 
 // Version returns the application version.
 func (s *AppService) Version() string { return AppVersion }

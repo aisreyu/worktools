@@ -11,9 +11,11 @@ import {
   NTag,
   useMessage,
 } from 'naive-ui'
-import { Dialogs, Events } from '@wailsio/runtime'
+import { Events } from '@wailsio/runtime'
+import { requestSavePath, publishSaved } from '../lib/saveFile'
 import { ClipboardService, ExportService, type ClipboardItem } from '../lib/api'
 import { overlays, closeClipboard } from '../lib/uiState'
+import { vault } from '../lib/vaultState'
 import { t } from '../lib/i18n'
 
 const message = useMessage()
@@ -35,7 +37,15 @@ const kindOptions = computed(() => [
   { label: t('clipboard.kind.text'), value: 'text' },
   { label: t('clipboard.kind.link'), value: 'link' },
   { label: t('clipboard.kind.code'), value: 'code' },
+  { label: t('clipboard.kind.image'), value: 'image' },
+  { label: t('clipboard.kind.file'), value: 'file' },
 ])
+
+/** Inline data URL for an image capture, or '' when its payload was cleared. */
+function imageSrc(it: ClipboardItem): string {
+  if (!it.data) return ''
+  return `data:${it.mime || 'image/png'};base64,${it.data}`
+}
 
 async function load() {
   loading.value = true
@@ -120,6 +130,16 @@ async function saveEdit(item: ClipboardItem) {
   }
 }
 
+async function clearData(item: ClipboardItem) {
+  try {
+    await ClipboardService.ClearData(item.id)
+    await load()
+    message.success(t('clipboard.dataCleared'))
+  } catch (e) {
+    message.error(errText(e))
+  }
+}
+
 async function clearUnpinned() {
   try {
     await ClipboardService.Clear(true)
@@ -160,16 +180,16 @@ async function toggleAuto(on: boolean) {
 }
 
 async function exportHistory() {
-  const path = await Dialogs.SaveFile({
-    Title: t('clipboard.export'),
-    Filename: 'clipboard.txt',
-    Filters: [{ DisplayName: 'Text', Pattern: '*.txt' }],
-  })
+  const name = 'clipboard.txt'
+  const path = await requestSavePath(t('clipboard.export'), name, [
+    { DisplayName: 'Text', Pattern: '*.txt' },
+  ])
   if (!path) return
   try {
     const content = await ClipboardService.ExportText(query.value, kind.value)
     await ExportService.SaveText(path, content)
-    message.success(t('clipboard.exportSaved', { path }))
+    const where = await publishSaved(path, name)
+    message.success(t('clipboard.exportSaved', { path: where || path }))
   } catch (e) {
     message.error(t('clipboard.exportFailed') + ': ' + errText(e))
   }
@@ -205,8 +225,13 @@ watch(
 )
 
 onMounted(() => {
-  load()
-  loadSettings()
+  // The panel is only reachable once unlocked; loading eagerly while locked
+  // would surface a "vault is locked" error on the unlock screen. Opening the
+  // panel reloads everything anyway (see the overlays.clipboard watcher).
+  if (vault.unlocked) {
+    load()
+    loadSettings()
+  }
   // Refresh live when the background poller captures new clipboard text.
   offClip = Events.On('nb:clipboard', () => {
     if (overlays.clipboard) load()
@@ -281,14 +306,34 @@ onUnmounted(() => {
           </template>
           <template v-else>
             <div class="cb-info" @click="copy(it)">
-              <div class="cb-preview">{{ it.preview || it.text.slice(0, 120) }}</div>
+              <img
+                v-if="it.kind === 'image' && imageSrc(it)"
+                class="cb-thumb"
+                :src="imageSrc(it)"
+                :alt="t('clipboard.imageAlt')"
+              />
+              <div v-if="it.kind === 'image' && !imageSrc(it)" class="cb-preview cb-muted">
+                {{ t('clipboard.noData') }}
+              </div>
+              <div v-else-if="it.kind !== 'image'" class="cb-preview">
+                {{ it.preview || it.text.slice(0, 120) }}
+              </div>
               <div class="cb-meta">
                 <n-tag size="tiny" round>{{ t(`clipboard.kind.${it.kind}`) }}</n-tag>
+                <span v-if="it.kind === 'image' && it.size">{{ Math.round(it.size / 1024) }} KB</span>
                 <span>{{ fmt(it.createdAt) }}</span>
                 <n-tag v-if="it.pinned" size="tiny" type="success" round>{{ t('clipboard.pinned') }}</n-tag>
               </div>
             </div>
             <div class="cb-item-actions">
+              <n-button
+                v-if="it.kind === 'image'"
+                size="tiny"
+                quaternary
+                @click.stop="clearData(it)"
+              >
+                {{ t('clipboard.clearData') }}
+              </n-button>
               <n-button size="tiny" quaternary @click.stop="togglePin(it)">
                 {{ it.pinned ? t('clipboard.unpin') : t('clipboard.pin') }}
               </n-button>
@@ -392,6 +437,18 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.cb-thumb {
+  max-height: 72px;
+  max-width: 180px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  object-fit: contain;
+  display: block;
+}
+.cb-muted {
+  opacity: 0.5;
+  font-style: italic;
 }
 .cb-meta {
   display: flex;

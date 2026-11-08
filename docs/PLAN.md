@@ -17,7 +17,7 @@
 | M4 | 记事本 | Markdown 笔记，重要信息随手记录，支持导出 MD/HTML/PDF |
 | M5 | 运维工具箱 | SSL 检测 / 端口探测 / 编解码 / 文本处理 / 密码生成 / 随机数据 / **图片压缩**等高频小工具 |
 | M6 | 备份与恢复 | 全量加密备份导出/还原；密保问题重置主密码 |
-| M7 | 私密文件夹 | 加密保存身份证复印件、营业执照等重要文件；分类、备注、预览与导出 |
+| M7 | 私密文件 | 加密保存身份证复印件、营业执照等重要文件；分类、备注、预览与导出 |
 
 **设计原则**
 
@@ -61,44 +61,45 @@ worktools/                       # Go module: github.com/aisreyu/worktools
 ├── main.go                     # Wails 应用入口：创建 App、注册 Service
 │
 ├── internal/                   # 业务与领域逻辑（不依赖 Wails）
-│   ├── app/                    # 应用装配：生命周期、服务注册
-│   │   ├── app.go
-│   │   └── lock.go             # 自动锁定计时、锁定/解锁状态机
 │   ├── vault/                  # 加密保险箱核心
 │   │   ├── crypto.go           # Argon2id + AEAD 封装
-│   │   ├── vault.go            # 打开/创建/锁定保险箱
+│   │   ├── vault.go            # 打开/创建/锁定保险箱、默认分类播种
 │   │   ├── recovery.go         # 密保问题与主密码重置
-│   │   └── session.go          # 内存中的派生密钥与解锁会话
-│   ├── store/                  # 持久化层（SQLite / 加密JSON 可替换）
-│   │   ├── store.go            # 接口定义 Repository
-│   │   ├── sqlite.go           # 实现
+│   │   ├── backup.go           # 全量加密备份导出/还原
+│   │   ├── repo.go             # URL / 密码条目仓储
+│   │   ├── repo_notes.go       # 记事本仓储
+│   │   ├── repo_schedules.go   # 日程仓储
+│   │   ├── repo_files.go       # 私密文件仓储
+│   │   ├── repo_categories.go  # 文件分类仓储
+│   │   ├── repo_secret_categories.go # 密码分类仓储（自定义分类）
+│   │   └── repo_clipboard.go   # 剪贴板历史仓储
+│   ├── store/                  # 持久化层（纯 Go SQLite）
+│   │   ├── store.go            # 打开数据库、迁移
 │   │   ├── schema.sql          # 建表语句
 │   │   └── models.go           # 领域模型
-│   ├── otp/
-│   │   ├── totp.go             # 生成/校验 TOTP，解析 otpauth:// URI
+│   ├── otp/                    # TOTP/HOTP
+│   │   ├── otp.go              # 业务封装（列表、实时码）
 │   │   ├── migration.go        # Google Authenticator otpauth-migration:// 导入
 │   │   ├── migration_export.go # 迁移格式导出（批量 URI / 二维码）
-│   │   ├── qr.go               # 二维码图片识别导入
-│   │   └── otp.go              # 业务封装（列表、实时码）
-│   ├── toolbox/                # 运维工具箱纯函数
-│   │   ├── net.go              # 端口探测、DNS、HTTP 探测
-│   │   ├── ssl.go              # SSL/TLS 证书检测与评级
-│   │   ├── encode.go           # base64/hex 编解码、哈希
-│   │   ├── jsonfmt.go          # JSON 格式化/压缩
-│   │   ├── times.go            # 时间戳 ↔ 时间互转
-│   │   ├── subnet.go           # 子网/掩码计算
-│   │   ├── textops.go          # 行列转换、拼接、引号、去重、文本↔JSON
-│   │   ├── password.go         # 密码生成、前后缀拼接、随机邮箱/手机/身份证
-│   │   └── rand.go             # 随机串
-│   └── config/
-│       └── config.go           # 非敏感配置读写
+│   │   └── qr.go               # 二维码图片识别导入
+│   ├── clipboard/              # 剪贴板历史与自动清空
+│   │   ├── clipboard.go        # 历史记录与去重
+│   │   ├── osclip_darwin.go    # macOS 系统剪贴板
+│   │   └── ring.go             # 环形缓冲
+│   ├── holiday/                # 节假日/工作日判定
+│   ├── toolbox/                # 运维工具箱纯函数（SSL/端口/编解码/JWT/K8s/
+│   │                           #   子网/cron/日志时间/图片压缩/水印/二维码/压缩包…）
+│   └── config/                 # 非敏感配置读写（桌面/移动端基准目录）
 │
 ├── services/                   # Wails v3 Service，暴露给前端（绑定层）
-│   ├── vault_service.go        # 解锁/锁定/改主密码/密保重置、URL 与密码 CRUD
+│   ├── vault_service.go        # 解锁/锁定/改主密码/密保重置、URL 与密码 CRUD、密码分类 CRUD
 │   ├── otp_service.go          # M3 OTP（含迁移导入导出）
 │   ├── note_service.go         # M4 记事本
-│   ├── file_service.go         # M7 私密文件夹（加密文件存取）
+│   ├── file_service.go         # M7 私密文件（加密文件存取 + 分类）
+│   ├── schedule_service.go     # 日程与提醒（DueForNotify / 系统通知）
+│   ├── clipboard_service.go    # 剪贴板历史
 │   ├── toolbox_service.go      # M5 工具箱（含密码存入保险箱、图片压缩）
+│   ├── workbench_service.go    # 工作台聚合视图
 │   ├── backup_service.go       # M6 备份导出/导入
 │   ├── openurl_service.go      # 打开 URL 并注入自动填写脚本
 │   ├── export_service.go       # 文件导出（MD/HTML 等）
@@ -110,19 +111,21 @@ worktools/                       # Go module: github.com/aisreyu/worktools
     ├── vite.config.ts
     ├── src/
     │   ├── main.ts
-    │   ├── App.vue
+    │   ├── App.vue             # 全局：自动锁定、全局日程提醒轮询
     │   ├── router/
-    │   ├── stores/             # 状态管理（Pinia）
-    │   ├── api/                # 调用 Wails 绑定（自动生成类型）
+    │   ├── lib/                # 前端工具（api 封装、i18n、主题、自动锁定、
+    │   │                       #   剪贴板自动清空、日程提醒、农历、Markdown…）
     │   ├── views/
     │   │   ├── Unlock.vue      # 主密码解锁页
     │   │   ├── Urls.vue        # M1
-    │   │   ├── Secrets.vue     # M2
+    │   │   ├── Secrets.vue     # M2（含自定义分类管理、置顶、复制自动清空）
     │   │   ├── Otp.vue         # M3
     │   │   ├── Notes.vue       # M4 记事本（Markdown）
-    │   │   ├── Files.vue       # M7 私密文件夹
+    │   │   ├── Files.vue       # M7 私密文件
+    │   │   ├── Schedule.vue    # 日程
+    │   │   ├── Calendar.vue    # 日历
     │   │   ├── Toolbox.vue     # M5
-    │   │   └── Settings.vue    # 设置（改密码、密保、备份）
+    │   │   └── Settings.vue    # 设置（改密码、密保、备份、自动锁定、剪贴板清空）
     │   └── components/
     └── bindings/               # Wails 自动生成的 TS 绑定（勿手改）
 ```
@@ -188,8 +191,20 @@ CREATE TABLE secret_entries (
   extra_ct    BLOB,                    -- 附加敏感信息(私钥、AK/SK等)密文
   extra_nonce BLOB,
   note        TEXT,
+  pinned      INTEGER DEFAULT 0,       -- 置顶/收藏
   created_at  INTEGER, updated_at INTEGER
 );
+
+-- 密码分类（自定义；内置 server/database/cloud/other 四项）
+CREATE TABLE secret_categories (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  code        TEXT NOT NULL,           -- 稳定 slug，被 secret_entries.category 引用
+  name_ct     BLOB NOT NULL,           -- 分类名密文
+  name_nonce  BLOB NOT NULL,
+  sort_order  INTEGER DEFAULT 0,
+  created_at  INTEGER, updated_at INTEGER
+);
+CREATE UNIQUE INDEX idx_secret_categories_code ON secret_categories(code);
 ```
 
 ### 4.4 M3 OTP
@@ -288,6 +303,7 @@ flowchart LR
 - 实时倒计时圆环，剩 N 秒变红提示。
 - 一键复制当前码（仅当剩余时间 > 3s 时允许）。
 - **Google Authenticator 迁移互导**：解析 `otpauth-migration://` 批量导入（含二维码图片识别）；反向导出为迁移 URI / 二维码，可迁移到其他验证器平台。
+- **明文恢复码导出**：一键导出全部（或所选）OTP 为可读文本（标题 / 发行方 / 账号 / 类型 / Base32 密钥 / otpauth URI），用于离线备份与打印，防止设备丢失后锁死。
 
 ### M4 记事本
 - 多条笔记独立管理（新建 / 编辑 / 删除）。
@@ -310,16 +326,23 @@ flowchart LR
 | 前后缀拼接 | 自定义前后缀批量拼接（如 `http://` + `api.apitd` + `.net`） |
 | 密码生成 | 低/中/高档位 + 自定义字符类/符号/排除易混淆，可存入保险箱 |
 | 随机数据 | 随机邮箱、手机号、身份证号（含校验码） |
-| 水印工具 | 图片 / PDF 加水印，支持批量、文字内容、字体大小 / 字体、颜色、透明度、角度与倾斜（对角线）、平铺、锚点、旋转（图片与 PDF）、预览 |
+| 图片压缩 | 目标体积 / 最长边 / 质量 / 格式，批量压缩，逐个保存或打包 ZIP 导出 |
+| 图片格式转换 | PNG / JPEG / GIF / BMP / TIFF 批量互转，可限制最长边并对 JPEG 指定质量，逐个保存或打包 ZIP 导出 |
+| 水印工具 | 图片 / PDF 加水印，支持批量、文字内容、字体大小 / 字体、颜色、透明度、角度与倾斜（对角线）、平铺与密集程度、锚点、旋转（图片与 PDF）、预览，批量结果打包 ZIP 导出 |
+| 文件夹打包 | 选择一个或多个文件夹，递归压缩为同名 ZIP（存放在源文件夹同级目录） |
+
+> 工具箱内按使用频次排序：**日常工具**（图片压缩、格式转换、水印、密码生成、时间戳、时间差、二维码）优先展示，其次文本工具、运维工具。
 
 > 工具箱为**无状态纯操作**（密码存入保险箱除外，需解锁状态），可独立页面直接使用。
 
 ### M6 备份与设置
 - 全量加密备份导出 / 还原。
+- **自动备份**：定期将加密库导出到指定本地目录，按 `worktools-autobackup-YYYYMMDD-HHMMSS.json` 命名，保留最近 N 份轮转（默认每天、保留 7 份）；备份密码加密存于库中（需解锁），仅在主库解锁时于后台调度执行，可随时「立即备份」。
 - 修改主密码。
 - **密保问题**：设置 3 个密保问题，凭密保答案重置主密码。
+- **外观**：主题模式（跟随系统 / 浅色 / 深色）与主题色（预设色板 + 自定义取色），立即生效并持久化到本地。
 
-### M7 私密文件夹
+### M7 私密文件
 - 加密保存身份证复印件、营业执照、合同、证书等重要文件，仅在解锁后可见。
 - **双存储**：≤ 512KB 的文件密文（`nonce || 密文`，AAD 绑定 `file_entries:data`）直接存入 SQLite；更大的文件加密落盘到 `<数据目录>/files/<hex>.enc`，数据库中仅存路径。替换或删除时同步清理旧磁盘密文。
 - 支持分类（身份证件 / 营业执照 / 合同协议 / 证书资质 / 财务凭证 / 其他）、标题搜索、备注、图片与 PDF 预览及明文导出。
@@ -329,15 +352,22 @@ flowchart LR
 ### 图片压缩（M5 工具箱）
 - 设定目标大小（KB）、最长边像素、质量与输出格式（自动 / JPEG / PNG）。
 - **自动格式**：含透明通道输出 PNG、否则 JPEG；目标大小通过二分搜索 JPEG 质量逼近，必要时按最长边等比缩放。
-- 支持**批量**选择图片，可选输出目录，处理结果展示原图 / 压缩后体积、压缩比与是否达标。
+- 支持**批量**选择图片，无需预先指定输出目录：处理结果展示原图 / 压缩后体积、压缩比与是否达标，可**逐个保存**（另存为对话框）或**一键打包为 ZIP 导出**。
+- **文件夹打包**：可选择一个或多个文件夹，各自递归压缩为同名 ZIP（存放在源文件夹同级目录），无需指定输出目录。
+
+### 图片格式转换（M5 工具箱）
+- 在常见格式间互转：**PNG / JPEG / GIF / BMP / TIFF**（`webp` 仅支持作为输入，Go 侧无纯编码器）。
+- 可限制**最长边**像素（0 保留原始尺寸）并对 JPEG 指定**质量**；支持批量选择。
+- 处理结果展示原格式 → 目标格式、尺寸与体积，可**逐个保存**或**一键打包为 ZIP 导出**。
 
 ### 水印工具（M5 工具箱）
 - 支持**图片**（jpg/jpeg/png/gif/bmp/webp/tif/tiff）与 **PDF** 文件添加水印，支持**批量**选择与处理。
-- 水印参数：文字内容、字体大小、字体（无衬线 / 衬线 / 等宽）、颜色、透明度、角度、**倾斜方案**（对角线）、平铺、锚点（九宫格）、是否置于上层。
-- **旋转**：图片与 PDF 均支持 90° / 180° / 270° 旋转。
+- 水印参数：文字内容、字体大小、字体（无衬线 / 衬线 / 等宽）、颜色、透明度、角度、**倾斜方案**（对角线）、平铺、**密集程度**、锚点（九宫格）、是否置于上层。
+- **密集程度**：平铺模式下的排布密度，取值为 20–300 的百分比（越大越密），同时支持滑杆与数值输入；图片与 PDF 均生效。字号决定单个水印的大小，密集程度只决定水印之间的间距（20% 时间距为水印尺寸的 100%，100% 时为 25%，300% 时水印边缘相接），因此调高密度不会缩小水印。
+- **旋转**：图片与 PDF 均支持 90° / 180° / 270° 旋转。旋转在**编辑过程中**生效（预览即所见），导出文件同时包含旋转后的页面与水印。
 - **PDF 指定页**：支持 `1,3,5-8` 形式的页码选择，留空表示全部页面。
 - **预览**：图片直接在应用内预览（base64 PNG，等比缩放）；PDF 使用系统缩略图（macOS `qlmanage`，其他平台提示不支持）。
-- 输出：可选输出目录，默认写入源文件同目录并加后缀，避免覆盖原文件。
+- 输出：无需预先指定输出目录。**单个文件**通过另存为对话框导出；**多个文件**一键打包为 ZIP 导出。默认文件名加后缀（`_wm` / `_min`）避免覆盖原文件。
 
 ---
 
@@ -402,8 +432,8 @@ wails3 package
 
 | # | 功能 | 说明 | 状态 |
 |---|------|------|------|
-| 1 | 全局快速搜索 | `Cmd/Ctrl+K` 命令面板，跨 URL/密码/OTP/记事/日程/工具统一检索并跳转 | ✅ |
-| 2 | 密码健康审计 | 检测弱密码、重复使用、长期未更新（默认 90 天），输出分级报告 | ✅ |
+| 1 | 全局快速搜索 | `Cmd/Ctrl+K` 命令面板，跨 URL/密码/OTP/记事/日程/工具/文件/剪贴板统一检索并跳转 | ✅ |
+| 2 | 密码健康审计 | 检测弱密码、重复使用、长期未更新（默认 90 天），输出分级报告，风险清单支持一键筛选 | ✅ |
 | 3 | URL 批量健康监测 | 并发探测可达性 + HTTPS 证书有效期，卡片实时状态点 | ✅ |
 | 4 | 系统托盘 + 快捷锁定 | 托盘菜单（显示/隐藏/锁定/退出）+ 全局快捷键 `Cmd/Ctrl+L` 锁定、`Cmd/Ctrl+Shift+W` 隐藏 | ✅ |
 | 5 | 剪贴板历史 | 内存环形记录（最多 50 条），支持固定、自动/手动清理 | ✅ |
@@ -426,7 +456,7 @@ wails3 package
 | 9 | CSV 转 SQL | CSV 生成 INSERT 语句 | ✅ |
 | 10 | 二维码生成 | 文本/URL 生成二维码并下载 | ✅ |
 
-### 10.3 运维工具（8 项）
+### 10.3 运维工具（9 项）
 
 | # | 功能 | 说明 | 状态 |
 |---|------|------|------|
@@ -436,9 +466,22 @@ wails3 package
 | 4 | 日志时间戳识别 | 自动识别日志时间格式并转换 | ✅ |
 | 5 | 端口扫描 | 常用端口组扫描，支持范围展开 | ✅ |
 | 6 | WHOIS 查询 | 域名注册信息查询 | ✅ |
-| 7 | DNS 查询 | A/AAAA/CNAME/MX/TXT 等记录查询 | ✅ |
-| 8 | SSL/子网/WHTTP 等 | SSL 证书检查、子网计算、HTTP 探测、TCPing | ✅ |
+| 7 | IP 归属地 | IP/域名地理位置、运营商、AS 查询，支持单/批量 | ✅ |
+| 8 | DNS 查询 | A/AAAA/CNAME/MX/TXT 等记录查询 | ✅ |
+| 9 | SSL/子网/WHTTP 等 | SSL 证书检查、子网计算、HTTP 探测、TCPing | ✅ |
 
 ### 10.4 数据库迁移
 
 日常使用功能为 `note_entries` 表新增了 `sensitive` 与 `attach_*` 列。由于 schema 使用 `CREATE TABLE IF NOT EXISTS`，已有数据库不会自动获得新列。`store.Open` 现在会在应用 schema 后执行一次幂等的 `migrate`（基于 `PRAGMA table_info` 检查并 `ALTER TABLE ADD COLUMN`），确保旧库平滑升级；`internal/store/store_test.go` 覆盖旧库与全新库两种场景。
+
+### 10.5 运维协作增强（5 项）
+
+| # | 功能 | 说明 | 状态 |
+|---|------|------|------|
+| 1 | 回收站（软删除） | URL/密码/OTP/笔记/文件删除后进入回收站，可还原或彻底删除；解锁时自动清理 30 天前的条目，清理时同步删除磁盘密文 | ✅ |
+| 2 | 日程重复 | 日程支持「不重复 / 每日 / 每周 / 每月」，标记完成时自动顺延下次日期并清除完成/提醒状态 | ✅ |
+| 3 | 备份历史还原 | 设置页列出自动备份文件（时间、大小），可直接选择某份备份并输入密码还原，用于误操作或历史版本回滚 | ✅ |
+| 4 | URL 按环境批量打开 | 为 URL 条目指定环境标签后，可一键批量打开同一环境下的全部 URL（运维切换环境时高效） | ✅ |
+| 5 | 搜索深链定位 | 命令面板检索到某条目后跳转对应页面并自动滚动 + 高亮该条目（`data-hid` + 路由 query） | ✅ |
+
+> 上述功能为软删除与增量迁移：`url_entries`/`secret_entries`/`otp_entries`/`note_entries`/`file_entries` 新增 `deleted_at`（及部分 `deleted_from`）列，`schedule_entries` 新增 `recur` 列，均由 `store.migrate` 幂等补列。

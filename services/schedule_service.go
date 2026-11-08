@@ -1,8 +1,11 @@
 package services
 
 import (
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/aisreyu/worktools/internal/holiday"
 	"github.com/aisreyu/worktools/internal/store"
@@ -11,11 +14,29 @@ import (
 
 // ScheduleService manages calendar schedules with due-time reminders.
 type ScheduleService struct {
-	v *vault.Vault
+	v        *vault.Vault
+	notifier *notifications.NotificationService
 }
 
-// NewScheduleService wires the service to a vault.
-func NewScheduleService(v *vault.Vault) *ScheduleService { return &ScheduleService{v: v} }
+// NewScheduleService wires the service to a vault and the desktop notifier.
+func NewScheduleService(v *vault.Vault, notifier *notifications.NotificationService) *ScheduleService {
+	return &ScheduleService{v: v, notifier: notifier}
+}
+
+// Notify delivers a reminder through the OS notification center. Returns an
+// error so the frontend can fall back to an in-app message if it fails (for
+// example when the app is unsigned or the user denied permission).
+func (s *ScheduleService) Notify(title, body string) error {
+	if s.notifier == nil {
+		return fmt.Errorf("notifications unavailable")
+	}
+	return s.notifier.SendNotification(notifications.NotificationOptions{
+		ID:                fmt.Sprintf("schedule-%d", time.Now().UnixNano()),
+		Title:             title,
+		Body:              body,
+		InterruptionLevel: notifications.InterruptionLevelActive,
+	})
+}
 
 // List returns all schedules.
 func (s *ScheduleService) List() ([]store.ScheduleEntry, error) {
@@ -36,7 +57,34 @@ func (s *ScheduleService) Save(e store.ScheduleEntry) (int64, error) {
 	if e.Remind < 0 {
 		e.Remind = 0
 	}
+	e.Recur = normalizeRecur(e.Recur)
 	return s.v.SaveSchedule(e)
+}
+
+// normalizeRecur maps unsupported values to none (one-shot).
+func normalizeRecur(r string) string {
+	switch r {
+	case "daily", "weekly", "monthly":
+		return r
+	default:
+		return ""
+	}
+}
+
+// nextDue rolls a due timestamp forward by one recurrence period.
+func nextDue(dueAt int64, recur string) int64 {
+	t := time.Unix(dueAt, 0)
+	switch recur {
+	case "daily":
+		t = t.AddDate(0, 0, 1)
+	case "weekly":
+		t = t.AddDate(0, 0, 7)
+	case "monthly":
+		t = t.AddDate(0, 1, 0)
+	default:
+		return dueAt
+	}
+	return t.Unix()
 }
 
 // Delete removes a schedule.
@@ -44,8 +92,24 @@ func (s *ScheduleService) Delete(id int64) error {
 	return s.v.DeleteSchedule(id)
 }
 
-// SetDone flips the done flag.
+// SetDone flips the done flag. Marking a recurring schedule done rolls its due
+// time forward to the next period and re-arms the reminder instead of closing
+// it, so the series keeps firing.
 func (s *ScheduleService) SetDone(id int64, done bool) error {
+	if done {
+		all, err := s.v.ListSchedules()
+		if err != nil {
+			return err
+		}
+		for _, e := range all {
+			if e.ID == id {
+				if e.Recur != "" {
+					return s.v.RescheduleNext(id, nextDue(e.DueAt, e.Recur))
+				}
+				break
+			}
+		}
+	}
 	return s.v.SetScheduleDone(id, done)
 }
 

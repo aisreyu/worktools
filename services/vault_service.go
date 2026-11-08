@@ -52,6 +52,8 @@ func (s *VaultService) Unlock(password string) error {
 		return err
 	}
 	s.touch()
+	// Enforce the trash retention window on each unlock (best-effort, fast).
+	_, _ = s.v.PurgeTrashOlderThan(30 * 24 * 3600)
 	return nil
 }
 
@@ -118,6 +120,12 @@ func (s *VaultService) DeleteURL(id int64) error {
 	return s.v.DeleteURL(id)
 }
 
+// SetURLPinned pins or unpins a URL entry.
+func (s *VaultService) SetURLPinned(id int64, pinned bool) error {
+	s.touch()
+	return s.v.SetURLPinned(id, pinned)
+}
+
 // ---- M2: secrets ----
 
 // ListSecrets returns all secret entries.
@@ -144,4 +152,41 @@ func (s *VaultService) SaveSecret(e store.SecretEntry) (int64, error) {
 func (s *VaultService) DeleteSecret(id int64) error {
 	s.touch()
 	return s.v.DeleteSecret(id)
+}
+
+// SetSecretPinned pins or unpins a secret entry.
+func (s *VaultService) SetSecretPinned(id int64, pinned bool) error {
+	s.touch()
+	return s.v.SetSecretPinned(id, pinned)
+}
+
+// ---- custom secret categories ----
+
+// ListCategories returns the user-managed secret categories.
+func (s *VaultService) ListCategories() ([]store.Category, error) {
+	if s.v.Locked() {
+		return nil, vault.ErrLocked
+	}
+	return s.v.ListSecretCategories()
+}
+
+// CreateCategory adds a user-defined secret category and returns it.
+func (s *VaultService) CreateCategory(name string) (store.Category, error) {
+	if s.v.Locked() {
+		return store.Category{}, vault.ErrLocked
+	}
+	s.touch()
+	return s.v.CreateSecretCategory(name)
+}
+
+// RenameCategory changes a secret category's display name.
+func (s *VaultService) RenameCategory(id int64, name string) error {
+	s.touch()
+	return s.v.RenameSecretCategory(id, name)
+}
+
+// DeleteCategory removes a secret category; it errors when secrets still use it.
+func (s *VaultService) DeleteCategory(id int64) error {
+	s.touch()
+	return s.v.DeleteSecretCategory(id)
 }

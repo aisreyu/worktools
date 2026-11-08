@@ -116,6 +116,92 @@ public class WailsJSBridge {
     }
 
     /**
+     * Publish a file written by the app into the shared Downloads collection so
+     * it shows up in the system file manager. Android has no save-file dialog,
+     * so callers write into the app sandbox first and hand the path to us.
+     * Called from JavaScript: wails.saveToDownloads('{"path":"...","name":"..."}')
+     *
+     * @param json {"path": sandbox file, "name": display name, "mime": MIME type}
+     * @return {"ok":true,"path":"Download/<name>"} or {"ok":false,"error":"..."}
+     */
+    @JavascriptInterface
+    public String saveToDownloads(final String json) {
+        try {
+            org.json.JSONObject opts = new org.json.JSONObject(json);
+            String srcPath = opts.optString("path", "");
+            String name = opts.optString("name", "");
+            String mime = opts.optString("mime", "application/octet-stream");
+            if (srcPath.isEmpty() || name.isEmpty()) {
+                return new org.json.JSONObject()
+                        .put("ok", false).put("error", "path and name are required").toString();
+            }
+            java.io.File src = new java.io.File(srcPath);
+            if (!src.isFile()) {
+                return new org.json.JSONObject()
+                        .put("ok", false).put("error", "source file not found").toString();
+            }
+            android.content.Context ctx = webView.getContext().getApplicationContext();
+            String location;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                android.content.ContentValues values = new android.content.ContentValues();
+                values.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                values.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS);
+                android.net.Uri uri = ctx.getContentResolver()
+                        .insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) {
+                    return new org.json.JSONObject()
+                            .put("ok", false).put("error", "cannot create download entry").toString();
+                }
+                try (java.io.OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
+                    if (out == null) {
+                        return new org.json.JSONObject()
+                                .put("ok", false).put("error", "cannot open download stream").toString();
+                    }
+                    copyFile(src, out);
+                }
+                location = android.os.Environment.DIRECTORY_DOWNLOADS + "/" + name;
+            } else {
+                // Legacy devices: the app's external files dir needs no permission.
+                java.io.File dir = ctx.getExternalFilesDir(null);
+                if (dir == null) {
+                    return new org.json.JSONObject()
+                            .put("ok", false).put("error", "external storage unavailable").toString();
+                }
+                java.io.File dest = new java.io.File(dir, name);
+                try (java.io.OutputStream out = new java.io.FileOutputStream(dest)) {
+                    copyFile(src, out);
+                }
+                location = dest.getAbsolutePath();
+            }
+            // The sandbox copy was only a staging file.
+            //noinspection ResultOfMethodCallIgnored
+            src.delete();
+            return new org.json.JSONObject().put("ok", true).put("path", location).toString();
+        } catch (Exception e) {
+            Log.e(TAG, "saveToDownloads failed", e);
+            try {
+                return new org.json.JSONObject()
+                        .put("ok", false).put("error", String.valueOf(e.getMessage())).toString();
+            } catch (Exception ignored) {
+                return "{\"ok\":false,\"error\":\"save failed\"}";
+            }
+        }
+    }
+
+    private static void copyFile(java.io.File src, java.io.OutputStream out) throws java.io.IOException {
+        try (java.io.InputStream in = new java.io.FileInputStream(src)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            out.flush();
+        }
+    }
+
+    /**
      * Send a callback response to JavaScript
      */
     private void sendCallback(String callbackId, String result, String error) {
