@@ -114,7 +114,7 @@ async function doReset() {
 
 <template>
   <div class="center">
-    <n-card style="width: 380px" :title="initialised ? '解锁保险箱' : '创建保险箱'">
+    <n-card style="width: 380px" :title="initialised ? '解锁' : '创建保险箱'">
       <n-form @submit.prevent="submit">
         <n-form-item :label="initialised ? '主密码' : '设置主密码'">
           <n-input
