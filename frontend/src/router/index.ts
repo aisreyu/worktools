@@ -11,6 +11,8 @@ import Schedule from '../views/Schedule.vue'
 import Toolbox from '../views/Toolbox.vue'
 import Settings from '../views/Settings.vue'
 import Trash from '../views/Trash.vue'
+import Screenshot from '../views/Screenshot.vue'
+import ScreenshotOverlay from '../views/ScreenshotOverlay.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -26,6 +28,8 @@ const router = createRouter({
     { path: '/schedule', name: 'schedule', component: Schedule, meta: { requiresUnlock: true } },
     { path: '/trash', name: 'trash', component: Trash, meta: { requiresUnlock: true } },
     { path: '/toolbox', name: 'toolbox', component: Toolbox },
+    { path: '/screenshot', name: 'screenshot', component: Screenshot },
+    { path: '/overlay', name: 'overlay', component: ScreenshotOverlay },
     { path: '/settings', name: 'settings', component: Settings, meta: { requiresUnlock: true } },
   ],
 })

@@ -47,6 +47,10 @@ func main() {
 	// Backup service also drives the rolling auto-backup scheduler.
 	backupSvc := services.NewBackupService(v)
 
+	// Screenshot service drives the full-screen overlay windows, so it needs
+	// the running application handle; it is attached right after app creation.
+	shotSvc := services.NewScreenshotService()
+
 	app := application.New(application.Options{
 		Name:        "worktools",
 		Description: "Ops desktop workbench",
@@ -65,6 +69,7 @@ func main() {
 			application.NewService(services.NewWorkbenchService(v)),
 			application.NewService(services.NewClipboardService(v)),
 			application.NewService(services.NewTrashService(v)),
+			application.NewService(shotSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -73,6 +78,9 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
 	})
+
+	// The screenshot service needs the app handle to create overlay windows.
+	shotSvc.AttachApp(app)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "WorkTools",

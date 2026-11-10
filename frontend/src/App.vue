@@ -39,6 +39,7 @@ const menuOptions = computed(() => [
   { label: t('menu.schedule'), key: 'schedule', disabled: !vault.unlocked },
   { label: t('menu.trash'), key: 'trash', disabled: !vault.unlocked },
   { label: t('menu.toolbox'), key: 'toolbox' },
+  { label: t('menu.screenshot'), key: 'screenshot' },
   { label: t('menu.settings'), key: 'settings', disabled: !vault.unlocked },
 ])
 
@@ -152,18 +153,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale">
+  <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="naiveLocale"
+    :date-locale="naiveDateLocale">
     <n-message-provider>
       <n-layout has-sider style="height: 100vh">
-        <n-layout-sider
-          :width="200"
-          :collapsed-width="0"
-          :collapsed="siderCollapsed"
-          collapse-mode="width"
-          :show-trigger="false"
-          :show-content="!siderCollapsed"
-          bordered
-        >
+        <n-layout-sider :width="200" :collapsed-width="0" :collapsed="siderCollapsed" collapse-mode="width"
+          :show-trigger="false" :show-content="!siderCollapsed" bordered>
           <div class="nb-drag sider-brand">WorkTools</div>
           <div class="sider-search">
             <n-button class="nb-no-drag" size="small" block secondary @click="togglePalette">
@@ -177,14 +172,8 @@ onUnmounted(() => {
         </n-layout-sider>
         <n-layout>
           <n-layout-header bordered class="app-header">
-            <n-button
-              v-if="vault.unlocked"
-              class="nb-no-drag sider-toggle"
-              size="small"
-              quaternary
-              :title="collapsed ? t('nav.expand') : t('nav.collapse')"
-              @click="toggleSider"
-            >
+            <n-button v-if="vault.unlocked" class="nb-no-drag sider-toggle" size="small" quaternary
+              :title="collapsed ? t('nav.expand') : t('nav.collapse')" @click="toggleSider">
               {{ collapsed ? '☰' : '«' }}
             </n-button>
             <VaultHeader class="header-rest" @lock="doLock" />
@@ -207,16 +196,19 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
 }
+
 .sider-toggle {
   flex: none;
   margin-left: 6px;
   font-size: 15px;
   line-height: 1;
 }
+
 .header-rest {
   flex: 1;
   min-width: 0;
 }
+
 .sider-brand {
   height: 44px;
   display: flex;
@@ -225,6 +217,7 @@ onUnmounted(() => {
   font-weight: 600;
   letter-spacing: 0.3px;
 }
+
 .sider-search {
   display: flex;
   flex-direction: column;
