@@ -21,9 +21,30 @@ type AutoBackup struct {
 	LastAt        int64  `json:"lastAt"` // unix seconds of the last successful run
 }
 
+// CloudBackup holds the S3-compatible remote-sync preferences. Access keys
+// are stored encrypted inside the vault, never here.
+type CloudBackup struct {
+	Enabled   bool   `json:"enabled"`
+	Endpoint  string `json:"endpoint"`  // e.g. https://s3.amazonaws.com
+	Region    string `json:"region"`    // e.g. cn-north-1
+	Bucket    string `json:"bucket"`    // target bucket
+	Prefix    string `json:"prefix"`    // object key prefix, e.g. worktools/
+	PathStyle bool   `json:"pathStyle"` // true for MinIO / most on-prem stores
+	Keep      int    `json:"keep"`      // remote copies to keep
+	LastAt    int64  `json:"lastAt"`    // unix seconds of the last successful upload
+	LastKey   string `json:"lastKey"`   // last uploaded object key
+	LastError string `json:"lastError"` // last upload failure message, if any
+}
+
 // Settings is the on-disk preference document.
 type Settings struct {
-	AutoBackup AutoBackup `json:"autoBackup"`
+	AutoBackup AutoBackup  `json:"autoBackup"`
+	CloudBackup CloudBackup `json:"cloudBackup"`
+}
+
+// DefaultCloudBackup returns the disabled-by-default cloud sync config.
+func DefaultCloudBackup() CloudBackup {
+	return CloudBackup{Enabled: false, Keep: 7}
 }
 
 // DefaultAutoBackup returns sensible defaults: a backups folder inside the app
@@ -48,7 +69,7 @@ func Path() (string, error) {
 // Load reads the settings file, filling in defaults when it is missing or
 // partially specified.
 func Load() (*Settings, error) {
-	s := &Settings{AutoBackup: DefaultAutoBackup()}
+	s := &Settings{AutoBackup: DefaultAutoBackup(), CloudBackup: DefaultCloudBackup()}
 	path, err := Path()
 	if err != nil {
 		return s, err
@@ -62,7 +83,7 @@ func Load() (*Settings, error) {
 	}
 	if err := json.Unmarshal(b, s); err != nil {
 		// Corrupt file: fall back to defaults rather than failing the app.
-		return &Settings{AutoBackup: DefaultAutoBackup()}, nil
+		return &Settings{AutoBackup: DefaultAutoBackup(), CloudBackup: DefaultCloudBackup()}, nil
 	}
 	def := DefaultAutoBackup()
 	if s.AutoBackup.Dir == "" {
@@ -73,6 +94,9 @@ func Load() (*Settings, error) {
 	}
 	if s.AutoBackup.Keep <= 0 {
 		s.AutoBackup.Keep = def.Keep
+	}
+	if s.CloudBackup.Keep <= 0 {
+		s.CloudBackup.Keep = 7
 	}
 	return s, nil
 }

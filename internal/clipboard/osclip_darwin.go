@@ -3,7 +3,7 @@
 package clipboard
 
 /*
-#cgo LDFLAGS: -framework Foundation -framework AppKit -mmacosx-version-min=12.0
+#cgo LDFLAGS: -framework Foundation -framework AppKit -mmacosx-version-min=10.13
 #include <stdlib.h>
 
 long wm_pb_change_count(void);

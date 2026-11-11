@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aisreyu/worktools/internal/cloudsync"
 	"github.com/aisreyu/worktools/internal/settings"
 	"github.com/aisreyu/worktools/internal/vault"
 )
@@ -217,6 +219,9 @@ func (s *BackupService) runBackup(cfg *settings.Settings, now time.Time) (string
 	pruneBackups(ab.Dir, ab.Keep)
 	cfg.AutoBackup.LastAt = now.Unix()
 	_ = settings.Save(cfg)
+	// Cloud sync piggybacks on the local run: same encrypted payload, extra
+	// copy off-machine. Failures are recorded but never fail the local run.
+	s.syncToCloud(cfg, name, data)
 	return path, nil
 }
 
@@ -324,5 +329,314 @@ func pruneBackups(dir string, keep int) {
 	files := listBackups(dir)
 	for i := keep; i < len(files); i++ {
 		_ = os.Remove(files[i])
+	}
+}
+
+// ---- 云同步备份（S3 兼容对象存储）----
+
+// CloudBackupStatus is the UI-facing snapshot of the cloud-sync feature.
+type CloudBackupStatus struct {
+	Enabled   bool   `json:"enabled"`
+	Endpoint  string `json:"endpoint"`
+	Region    string `json:"region"`
+	Bucket    string `json:"bucket"`
+	Prefix    string `json:"prefix"`
+	PathStyle bool   `json:"pathStyle"`
+	Keep      int    `json:"keep"`
+	LastAt    int64  `json:"lastAt"`
+	LastKey   string `json:"lastKey"`
+	LastError string `json:"lastError"`
+	HasAK     bool   `json:"hasAK"`
+}
+
+// cloudConfig assembles the cloudsync.Config from settings plus the secrets
+// stored in the vault. hasAK reports whether credentials are present.
+func (s *BackupService) cloudConfig(cfg *settings.Settings) (cloudsync.Config, bool, error) {
+	cb := cfg.CloudBackup
+	ak, err := s.v.GetAppSecret(vault.AppSecretKeyCloudAK)
+	if err != nil && err != sql.ErrNoRows {
+		return cloudsync.Config{}, false, err
+	}
+	sk, err := s.v.GetAppSecret(vault.AppSecretKeyCloudSK)
+	if err != nil && err != sql.ErrNoRows {
+		return cloudsync.Config{}, false, err
+	}
+	return cloudsync.Config{
+		Endpoint:  cb.Endpoint,
+		Region:    cb.Region,
+		Bucket:    cb.Bucket,
+		Prefix:    cb.Prefix,
+		PathStyle: cb.PathStyle,
+		AccessKey: ak,
+		SecretKey: sk,
+	}, ak != "" && sk != "", nil
+}
+
+// CloudBackupStatus returns the current cloud-sync configuration.
+func (s *BackupService) CloudBackupStatus() (CloudBackupStatus, error) {
+	cfg, err := settings.Load()
+	if err != nil {
+		return CloudBackupStatus{}, err
+	}
+	cb := cfg.CloudBackup
+	_, hasAK, err := s.cloudConfig(cfg)
+	if err != nil && err != vault.ErrLocked {
+		return CloudBackupStatus{}, err
+	}
+	return CloudBackupStatus{
+		Enabled:   cb.Enabled,
+		Endpoint:  cb.Endpoint,
+		Region:    cb.Region,
+		Bucket:    cb.Bucket,
+		Prefix:    cb.Prefix,
+		PathStyle: cb.PathStyle,
+		Keep:      cb.Keep,
+		LastAt:    cb.LastAt,
+		LastKey:   cb.LastKey,
+		LastError: cb.LastError,
+		HasAK:     hasAK,
+	}, nil
+}
+
+// SaveCloudBackupSettings persists the non-secret cloud-sync configuration.
+// Credentials are handled by SetCloudBackupCredentials.
+func (s *BackupService) SaveCloudBackupSettings(enabled bool, endpoint, region, bucket, prefix string, pathStyle bool, keep int) error {
+	if keep <= 0 {
+		keep = 7
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	bucket = strings.TrimSpace(bucket)
+	if enabled && (endpoint == "" || bucket == "") {
+		return errText("启用云同步需要填写 Endpoint 和 Bucket")
+	}
+	cfg, err := settings.Load()
+	if err != nil {
+		return err
+	}
+	cfg.CloudBackup.Enabled = enabled
+	cfg.CloudBackup.Endpoint = endpoint
+	cfg.CloudBackup.Region = strings.TrimSpace(region)
+	cfg.CloudBackup.Bucket = bucket
+	cfg.CloudBackup.Prefix = strings.TrimSpace(prefix)
+	cfg.CloudBackup.PathStyle = pathStyle
+	cfg.CloudBackup.Keep = keep
+	return settings.Save(cfg)
+}
+
+// SetCloudBackupCredentials stores the S3 access/secret keys encrypted in the
+// vault. The vault must be unlocked. Pass empty strings to keep existing.
+func (s *BackupService) SetCloudBackupCredentials(accessKey, secretKey string) error {
+	if strings.TrimSpace(accessKey) != "" {
+		if err := s.v.SetAppSecret(vault.AppSecretKeyCloudAK, accessKey); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(secretKey) != "" {
+		if err := s.v.SetAppSecret(vault.AppSecretKeyCloudSK, secretKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClearCloudBackupCredentials forgets the stored S3 keys.
+func (s *BackupService) ClearCloudBackupCredentials() error {
+	if err := s.v.DeleteAppSecret(vault.AppSecretKeyCloudAK); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	return s.v.DeleteAppSecret(vault.AppSecretKeyCloudSK)
+}
+
+// TestCloudConnection verifies the configured target with a signed list
+// request, so the user knows the endpoint/bucket/credentials work before
+// relying on the schedule.
+func (s *BackupService) TestCloudConnection() error {
+	cfg, err := settings.Load()
+	if err != nil {
+		return err
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if !hasAK {
+		return errText("未配置访问密钥（AK/SK）")
+	}
+	return cloudsync.New(cconf).Head()
+}
+
+// CloudBackupFile describes one remote backup object.
+type CloudBackupFile struct {
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	MTime int64  `json:"mtime"`
+}
+
+// ListCloudBackups returns the remote backup objects, newest first.
+func (s *BackupService) ListCloudBackups() ([]CloudBackupFile, error) {
+	cfg, err := settings.Load()
+	if err != nil {
+		return nil, err
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAK {
+		return nil, errText("未配置访问密钥（AK/SK）")
+	}
+	objs, err := cloudsync.New(cconf).List(cconf.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CloudBackupFile, 0, len(objs))
+	for _, o := range objs {
+		if !strings.Contains(o.Key, backupPrefix) {
+			continue // skip unrelated objects under the same prefix
+		}
+		name := o.Key
+		if i := strings.LastIndex(o.Key, "/"); i >= 0 {
+			name = o.Key[i+1:]
+		}
+		out = append(out, CloudBackupFile{Key: o.Key, Name: name, Size: o.Size, MTime: o.LastModified.Unix()})
+	}
+	return out, nil
+}
+
+// RunCloudBackupNow performs one local backup and uploads it immediately.
+// Returns the local path and the remote object key.
+func (s *BackupService) RunCloudBackupNow() (string, string, error) {
+	cfg, err := settings.Load()
+	if err != nil {
+		return "", "", err
+	}
+	if !cfg.CloudBackup.Enabled {
+		return "", "", errText("云同步未启用")
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil {
+		return "", "", err
+	}
+	if !hasAK {
+		return "", "", errText("未配置访问密钥（AK/SK）")
+	}
+	localPath, err := s.runBackup(cfg, time.Now())
+	if err != nil {
+		return "", "", err
+	}
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return "", "", err
+	}
+	key := cloudsync.JoinPrefix(cconf.Prefix, filepath.Base(localPath))
+	if err := cloudsync.New(cconf).Put(key, data); err != nil {
+		s.recordCloudResult(cfg, 0, "", err)
+		return localPath, "", err
+	}
+	s.recordCloudResult(cfg, time.Now().Unix(), key, nil)
+	s.pruneCloudBackups(cconf)
+	return localPath, key, nil
+}
+
+// RestoreFromCloud downloads a remote backup object and merge-imports it.
+// Returns the number of imported entries.
+func (s *BackupService) RestoreFromCloud(key, password string) (int, error) {
+	if strings.TrimSpace(key) == "" {
+		return 0, errText("缺少对象 Key")
+	}
+	cfg, err := settings.Load()
+	if err != nil {
+		return 0, err
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil {
+		return 0, err
+	}
+	if !hasAK {
+		return 0, errText("未配置访问密钥（AK/SK）")
+	}
+	data, err := cloudsync.New(cconf).Get(key)
+	if err != nil {
+		return 0, err
+	}
+	return s.v.ImportBackup(data, password)
+}
+
+// DeleteCloudBackup removes one remote backup object.
+func (s *BackupService) DeleteCloudBackup(key string) error {
+	if strings.TrimSpace(key) == "" {
+		return errText("缺少对象 Key")
+	}
+	cfg, err := settings.Load()
+	if err != nil {
+		return err
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if !hasAK {
+		return errText("未配置访问密钥（AK/SK）")
+	}
+	return cloudsync.New(cconf).Delete(key)
+}
+
+// syncToCloud uploads one freshly-produced backup payload if cloud sync is
+// enabled, recording the outcome in settings for the UI. It is best-effort:
+// a network failure never fails the local backup that triggered it.
+func (s *BackupService) syncToCloud(cfg *settings.Settings, name string, data []byte) {
+	cb := cfg.CloudBackup
+	if !cb.Enabled {
+		return
+	}
+	cconf, hasAK, err := s.cloudConfig(cfg)
+	if err != nil || !hasAK {
+		s.recordCloudResult(cfg, 0, "", errText("云同步未配置访问密钥（AK/SK）"))
+		return
+	}
+	key := cloudsync.JoinPrefix(cconf.Prefix, name)
+	if err := cloudsync.New(cconf).Put(key, data); err != nil {
+		s.recordCloudResult(cfg, 0, "", err)
+		return
+	}
+	s.recordCloudResult(cfg, time.Now().Unix(), key, nil)
+	s.pruneCloudBackups(cconf)
+}
+
+// recordCloudResult persists the last upload outcome (success or failure) so
+// the settings page can show why the latest sync did or did not happen.
+func (s *BackupService) recordCloudResult(cfg *settings.Settings, at int64, key string, upErr error) {
+	if at > 0 {
+		cfg.CloudBackup.LastAt = at
+		cfg.CloudBackup.LastKey = key
+		cfg.CloudBackup.LastError = ""
+	} else if upErr != nil {
+		cfg.CloudBackup.LastError = upErr.Error()
+	}
+	_ = settings.Save(cfg)
+}
+
+// pruneCloudBackups keeps only the newest Keep remote objects that match our
+// backup prefix, deleting the rest.
+func (s *BackupService) pruneCloudBackups(cconf cloudsync.Config) {
+	keep := 7
+	cfg, err := settings.Load()
+	if err == nil && cfg.CloudBackup.Keep > 0 {
+		keep = cfg.CloudBackup.Keep
+	}
+	objs, err := cloudsync.New(cconf).List(cconf.Prefix)
+	if err != nil {
+		return
+	}
+	mine := make([]cloudsync.Object, 0, len(objs))
+	for _, o := range objs {
+		if strings.Contains(o.Key, backupPrefix) {
+			mine = append(mine, o)
+		}
+	}
+	c := cloudsync.New(cconf)
+	for i := keep; i < len(mine); i++ {
+		_ = c.Delete(mine[i].Key)
 	}
 }

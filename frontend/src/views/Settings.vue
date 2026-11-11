@@ -33,6 +33,8 @@ import {
   type PasswordAuditFinding,
   type AutoBackupStatus,
   type BackupFile,
+  type CloudBackupStatus,
+  type CloudBackupFile,
   type ImportedCredential,
   type ImportedCredentials,
 } from '../lib/api'
@@ -367,6 +369,147 @@ function fmtTs(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// ---- Cloud sync backup (S3-compatible) ----
+const cloud = ref<CloudBackupStatus | null>(null)
+const cloudEnabled = ref(false)
+const cloudEndpoint = ref('')
+const cloudRegion = ref('')
+const cloudBucket = ref('')
+const cloudPrefix = ref('')
+const cloudPathStyle = ref(true)
+const cloudKeep = ref(7)
+const cloudAK = ref('')
+const cloudSK = ref('')
+const cloudSaving = ref(false)
+const cloudTesting = ref(false)
+const cloudRunning = ref(false)
+const cloudFiles = ref<CloudBackupFile[]>([])
+const cloudFilesLoading = ref(false)
+const cloudRestorePwd = ref('')
+const cloudRestoringKey = ref('')
+const showCloudRestoreModal = ref(false)
+const cloudRestoreTarget = ref<CloudBackupFile | null>(null)
+
+function applyCloudStatus(s: CloudBackupStatus) {
+  cloud.value = s
+  cloudEnabled.value = s.enabled
+  cloudEndpoint.value = s.endpoint
+  cloudRegion.value = s.region
+  cloudBucket.value = s.bucket
+  cloudPrefix.value = s.prefix
+  cloudPathStyle.value = s.pathStyle
+  cloudKeep.value = s.keep
+}
+
+async function loadCloudBackup() {
+  try {
+    applyCloudStatus((await BackupService.CloudBackupStatus()) as CloudBackupStatus)
+  } catch {
+    // Silent: vault may be locked during initial mount.
+  }
+}
+
+async function saveCloudBackupSettings() {
+  cloudSaving.value = true
+  try {
+    await BackupService.SaveCloudBackupSettings(
+      cloudEnabled.value,
+      cloudEndpoint.value,
+      cloudRegion.value,
+      cloudBucket.value,
+      cloudPrefix.value,
+      cloudPathStyle.value,
+      cloudKeep.value,
+    )
+    if (cloudAK.value || cloudSK.value) {
+      await BackupService.SetCloudBackupCredentials(cloudAK.value, cloudSK.value)
+      cloudAK.value = ''
+      cloudSK.value = ''
+    }
+    await loadCloudBackup()
+    message.success(t('cloudBackup.saved'))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cloudSaving.value = false
+  }
+}
+
+async function testCloudConnection() {
+  cloudTesting.value = true
+  try {
+    await BackupService.TestCloudConnection()
+    message.success(t('cloudBackup.testOk'))
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cloudTesting.value = false
+  }
+}
+
+async function runCloudBackupNow() {
+  cloudRunning.value = true
+  try {
+    const [, key] = await BackupService.RunCloudBackupNow()
+    message.success(t('cloudBackup.ranNow', { key }))
+    await loadCloudBackup()
+    await loadCloudFiles()
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cloudRunning.value = false
+  }
+}
+
+async function loadCloudFiles() {
+  cloudFilesLoading.value = true
+  try {
+    cloudFiles.value = ((await BackupService.ListCloudBackups()) ?? []) as CloudBackupFile[]
+  } catch {
+    // ignore: not configured or locked
+  } finally {
+    cloudFilesLoading.value = false
+  }
+}
+
+function openCloudRestore(f: CloudBackupFile) {
+  cloudRestoreTarget.value = f
+  cloudRestorePwd.value = ''
+  showCloudRestoreModal.value = true
+}
+
+async function confirmCloudRestore() {
+  const f = cloudRestoreTarget.value
+  if (!f) return
+  if (!cloudRestorePwd.value) {
+    message.warning(t('autoBackup.passwordNeeded'))
+    return
+  }
+  cloudRestoringKey.value = f.key
+  try {
+    const n = await BackupService.RestoreFromCloud(f.key, cloudRestorePwd.value)
+    message.success(t('autoBackup.restoreDone', { n }))
+    showCloudRestoreModal.value = false
+    await refreshStatus()
+  } catch (e) {
+    message.error(errText(e))
+  } finally {
+    cloudRestoringKey.value = ''
+  }
+}
+
+async function deleteCloudBackup(f: CloudBackupFile) {
+  // eslint-disable-next-line no-alert
+  if (!window.confirm(t('cloudBackup.deleteConfirm'))) return
+  try {
+    await BackupService.DeleteCloudBackup(f.key)
+    message.success(t('cloudBackup.deleted'))
+    await loadCloudFiles()
+  } catch (e) {
+    message.error(errText(e))
+  }
+}
+
 // ---- Password health audit ----
 const auditReport = ref<PasswordAuditReport | null>(null)
 const auditing = ref(false)
@@ -477,6 +620,7 @@ onMounted(async () => {
   await loadRecovery()
   await loadAutoBackup()
   await loadBackupFiles()
+  await loadCloudBackup()
   try {
     info.value = await AppService.Info()
   } catch {
@@ -838,6 +982,94 @@ onMounted(async () => {
           </tbody>
         </n-table>
       </n-card>
+
+      <!-- Cloud sync backup (S3-compatible) -->
+      <n-card :title="t('cloudBackup.title')" size="small">
+        <div class="hint" style="margin-bottom: 10px">{{ t('cloudBackup.desc') }}</div>
+        <n-form label-placement="left" label-width="96">
+          <n-form-item :label="t('cloudBackup.enable')">
+            <n-switch v-model:value="cloudEnabled" />
+            <span v-if="cloud" style="margin-left: 12px; font-size: 12px; opacity: 0.55">
+              {{ t('cloudBackup.lastSync') }}: {{ fmtTs(cloud.lastAt) }}
+              <template v-if="cloud.lastKey"> · {{ t('cloudBackup.lastKey') }}: {{ cloud.lastKey }}</template>
+              <template v-if="!cloud.hasAK"> · {{ t('cloudBackup.noCreds') }}</template>
+            </span>
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.endpoint')">
+            <n-input v-model:value="cloudEndpoint" :placeholder="t('cloudBackup.endpointPlaceholder')" style="max-width: 420px" />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.region')">
+            <n-input v-model:value="cloudRegion" :placeholder="t('cloudBackup.regionPlaceholder')" style="max-width: 220px" />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.bucket')">
+            <n-input v-model:value="cloudBucket" :placeholder="t('cloudBackup.bucketPlaceholder')" style="max-width: 320px" />
+            <span class="hint" style="margin-left: 16px">{{ t('cloudBackup.keep') }}</span>
+            <n-input-number v-model:value="cloudKeep" :min="1" :max="100" size="small" style="width: 90px; margin-left: 8px" />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.prefix')">
+            <n-input v-model:value="cloudPrefix" :placeholder="t('cloudBackup.prefixPlaceholder')" style="max-width: 320px" />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.pathStyle')">
+            <n-switch v-model:value="cloudPathStyle" />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.ak')">
+            <n-input
+              v-model:value="cloudAK"
+              :placeholder="cloud?.hasAK ? t('cloudBackup.credKeep') : t('cloudBackup.ak')"
+              style="max-width: 320px"
+            />
+          </n-form-item>
+          <n-form-item :label="t('cloudBackup.sk')">
+            <n-input
+              v-model:value="cloudSK"
+              type="password"
+              show-password-on="click"
+              :placeholder="cloud?.hasAK ? t('cloudBackup.credKeep') : t('cloudBackup.sk')"
+              style="max-width: 320px"
+            />
+          </n-form-item>
+        </n-form>
+        <n-space>
+          <n-button type="primary" :loading="cloudSaving" @click="saveCloudBackupSettings">{{ t('cloudBackup.save') }}</n-button>
+          <n-button :loading="cloudTesting" @click="testCloudConnection">{{ t('cloudBackup.test') }}</n-button>
+          <n-button :loading="cloudRunning" @click="runCloudBackupNow">{{ t('cloudBackup.runNow') }}</n-button>
+        </n-space>
+        <div v-if="cloud?.lastError" style="margin-top: 8px; font-size: 12px; color: #e88080">
+          {{ t('cloudBackup.lastError') }}: {{ cloud.lastError }}
+        </div>
+        <div style="margin-top: 10px; font-size: 12px; opacity: 0.55">{{ t('cloudBackup.securityHint') }}</div>
+
+        <!-- Remote backup list -->
+        <n-divider style="margin: 16px 0 12px">{{ t('cloudBackup.history') }}</n-divider>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+          <span class="hint">{{ t('cloudBackup.historyHint') }}</span>
+          <n-button size="tiny" quaternary :loading="cloudFilesLoading" @click="loadCloudFiles">🔄</n-button>
+        </div>
+        <n-empty v-if="cloudFiles.length === 0" :description="t('cloudBackup.historyEmpty')" size="small" />
+        <n-table v-else :bordered="false" size="small">
+          <thead>
+            <tr>
+              <th>{{ t('autoBackup.colFile') }}</th>
+              <th>{{ t('autoBackup.colTime') }}</th>
+              <th>{{ t('autoBackup.colSize') }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="f in cloudFiles" :key="f.key">
+              <td style="max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" :title="f.key">{{ f.name }}</td>
+              <td>{{ fmtTs(f.mtime) }}</td>
+              <td>{{ fmtSize(f.size) }}</td>
+              <td style="text-align: right">
+                <n-space :size="4" justify="end">
+                  <n-button size="tiny" @click="openCloudRestore(f)">{{ t('autoBackup.restoreBtn') }}</n-button>
+                  <n-button size="tiny" quaternary type="error" @click="deleteCloudBackup(f)">{{ t('cloudBackup.deleteBtn') }}</n-button>
+                </n-space>
+              </td>
+            </tr>
+          </tbody>
+        </n-table>
+      </n-card>
     </n-space>
   </div>
 
@@ -856,6 +1088,25 @@ onMounted(async () => {
       <div style="display: flex; justify-content: flex-end; gap: 8px">
         <n-button @click="showRestoreModal = false">{{ t('autoBackup.cancel') }}</n-button>
         <n-button type="primary" :loading="!!restoringPath" @click="confirmRestore">{{ t('autoBackup.restoreBtn') }}</n-button>
+      </div>
+    </template>
+  </n-modal>
+
+  <n-modal v-model:show="showCloudRestoreModal" preset="card" :title="t('cloudBackup.restoreTitle')" style="width: 460px">
+    <div v-if="cloudRestoreTarget" class="hint" style="margin-bottom: 12px">
+      {{ cloudRestoreTarget.name }} · {{ fmtTs(cloudRestoreTarget.mtime) }}
+    </div>
+    <n-input
+      v-model:value="cloudRestorePwd"
+      type="password"
+      show-password-on="click"
+      :placeholder="t('autoBackup.passwordNeeded')"
+    />
+    <div class="hint" style="margin-top: 10px">{{ t('cloudBackup.restoreWarn') }}</div>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <n-button @click="showCloudRestoreModal = false">{{ t('autoBackup.cancel') }}</n-button>
+        <n-button type="primary" :loading="!!cloudRestoringKey" @click="confirmCloudRestore">{{ t('autoBackup.restoreBtn') }}</n-button>
       </div>
     </template>
   </n-modal>

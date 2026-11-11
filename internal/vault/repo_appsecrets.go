@@ -9,6 +9,13 @@ import (
 // password used by the auto-backup scheduler.
 const AppSecretKeyAutoBackup = "autobackup.password"
 
+// AppSecret keys for the S3-compatible cloud backup target. The secret key is
+// stored under its own key so it can be rotated independently of the AK.
+const (
+	AppSecretKeyCloudAK = "cloudbackup.access_key"
+	AppSecretKeyCloudSK = "cloudbackup.secret_key"
+)
+
 // SetAppSecret stores an encrypted application secret under key. The vault
 // must be unlocked.
 func (v *Vault) SetAppSecret(key, value string) error {

@@ -5,6 +5,7 @@ import * as Store from '../../bindings/github.com/aisreyu/worktools/internal/sto
 import * as OTP from '../../bindings/github.com/aisreyu/worktools/internal/otp'
 import * as Toolbox from '../../bindings/github.com/aisreyu/worktools/internal/toolbox'
 import * as Holiday from '../../bindings/github.com/aisreyu/worktools/internal/holiday'
+import * as Screenshot from '../../bindings/github.com/aisreyu/worktools/internal/screenshot'
 
 export const AppService = Services.AppService
 export const WorkbenchService = Services.WorkbenchService
@@ -19,6 +20,7 @@ export const ExportService = Services.ExportService
 export const ScheduleService = Services.ScheduleService
 export const ClipboardService = Services.ClipboardService
 export const TrashService = Services.TrashService
+export const ScreenshotService = Services.ScreenshotService
 
 export type VaultStatus = Services.Status
 export type URLEntry = Store.URLEntry
@@ -45,6 +47,8 @@ export const Kind = Holiday.Kind
 export type AppInfo = Services.AppInfo
 export type AutoBackupStatus = Services.AutoBackupStatus
 export type BackupFile = Services.BackupFile
+export type CloudBackupStatus = Services.CloudBackupStatus
+export type CloudBackupFile = Services.CloudBackupFile
 export type TrashItem = Store.TrashItem
 export type SearchHit = Toolbox.SearchHit
 export type PasswordAuditFinding = Toolbox.PasswordAuditFinding
@@ -55,6 +59,12 @@ export type ImportedCredentials = Toolbox.ImportedCredentials
 export type ClipboardItem = Store.ClipboardItem
 export type PhoneResult = Toolbox.PhoneResult
 export type IDCardResult = Toolbox.IDCardResult
+export type ShotResult = Services.ShotResult
+export type ScreenInfo = Services.ScreenInfo
+export type ScreenshotInfo = Services.ScreenshotInfo
+export type Rect = Screenshot.Rect
+export type StitchResult = Screenshot.StitchResult
+export type OCRResult = Screenshot.OCRResult
 
 export const VaultErrorLocked = 'vault is locked'
 
